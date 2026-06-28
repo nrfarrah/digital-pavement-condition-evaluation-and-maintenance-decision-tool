@@ -290,7 +290,7 @@ with tab2:
                   "Poor": "background-color: #fadbd8; color: #922b21"}
         return colors.get(val, "")
 
-    styled = display_pci.style.applymap(color_condition, subset=["Condition"])
+    styled = display_pci.style.map(color_condition, subset=["Condition"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
@@ -355,7 +355,7 @@ with tab3:
                   "Poor (Rough)": "background-color: #fadbd8; color: #922b21"}
         return colors.get(val, "")
 
-    styled_iri = display_iri.style.applymap(color_iri_condition, subset=["Condition"])
+    styled_iri = display_iri.style.map(color_iri_condition, subset=["Condition"])
     st.dataframe(styled_iri, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
@@ -427,7 +427,7 @@ with tab4:
         }
         return colors.get(val, "")
 
-    styled_hybrid = df_hybrid.style.applymap(color_combined, subset=["PCI Class", "IRI Class", "Combined Condition"])
+    styled_hybrid = df_hybrid.style.map(color_combined, subset=["PCI Class", "IRI Class", "Combined Condition"])
     st.dataframe(styled_hybrid, use_container_width=True, hide_index=True)
 
     st.markdown("---")
