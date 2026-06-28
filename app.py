@@ -11,33 +11,28 @@ st.set_page_config(
 )
 
 DEFECT_WEIGHTS = {
-    # Cracking
     "Alligator (Fatigue) Crack": 2.0,
+    "Bleeding/Flushing": 1.0,
     "Block Crack": 1.4,
-    "Edge Crack": 1.1,
-    "Longitudinal Crack": 1.0,
-    "Reflection Crack at Joints": 1.2,
-    "Transverse Crack": 1.1,
-    # Surface deformation
+    "Bumps and Sags": 1.4,
     "Corrugation": 1.5,
     "Depression": 1.6,
+    "Edge Crack": 1.1,
+    "Lane/Shoulder Drop-off": 1.2,
+    "Longitudinal Crack": 1.0,
+    "Patching": 1.5,
+    "Polished Aggregate": 0.8,
+    "Potholes": 2.2,
+    "Railroad Crossing": 1.0,
+    "Raveling": 1.2,
+    "Reflection Crack at Joints": 1.2,
     "Rutting": 1.8,
     "Shoving": 1.8,
-    "Swells": 1.3,
-    "Bumps and Sags": 1.4,
-    # Surface defects
-    "Bleeding/Flushing": 1.0,
-    "Polished Aggregate": 0.8,
-    "Raveling": 1.2,
-    "Weathering": 1.0,
-    # Patches & joints
-    "Patching": 1.5,
-    "Railroad Crossing": 1.0,
     "Spalling of Longitudinal Joint": 1.3,
     "Spalling of Transverse Joints": 1.3,
-    # Other
-    "Potholes": 2.2,
-    "Lane/Shoulder Drop-off": 1.2,
+    "Swells": 1.3,
+    "Transverse Crack": 1.1,
+    "Weathering": 1.0,
     "Other (Custom)": 1.0,  # fallback weight; user supplies name
 }
 
