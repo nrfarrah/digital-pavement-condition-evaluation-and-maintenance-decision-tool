@@ -217,7 +217,6 @@ with tabs[0]:
                             df_pci_input = df_pci_input.iloc[header_row+1:].reset_index(drop=True)
                             df_pci_input = df_pci_input.dropna(subset=["Section ID"])
                             df_pci_input = df_pci_input[df_pci_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
-                            df_pci_input = df_pci_input.head(10)
                             st.markdown("### 🔍 PCI Data from Excel")
                             st.dataframe(df_pci_input[["Section ID","Defect Type","Severity","Area Affected (%)"]].reset_index(drop=True),
                                          use_container_width=True, hide_index=True)
@@ -250,7 +249,6 @@ with tabs[0]:
                             df_iri_input = df_iri_input.iloc[header_row_iri+1:].reset_index(drop=True)
                             df_iri_input = df_iri_input.dropna(subset=["Section ID"])
                             df_iri_input = df_iri_input[df_iri_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
-                            df_iri_input = df_iri_input.head(10)
                             df_iri_input["Section ID"] = df_iri_input["Section ID"].astype(float).astype(int)
                             df_iri_input["IRI (m/km)"] = pd.to_numeric(df_iri_input["IRI (m/km)"], errors="coerce")
                             iri_avg = df_iri_input.groupby("Section ID")["IRI (m/km)"].mean().reset_index()
