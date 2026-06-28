@@ -4,18 +4,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ─────────────────────────────────────────────
-# PAGE CONFIG
-# ─────────────────────────────────────────────
 st.set_page_config(
     page_title="TCG633 – Pavement Condition Evaluation Tool",
     page_icon="🛣️",
     layout="wide"
 )
 
-# ─────────────────────────────────────────────
-# CONSTANTS & LOOKUP TABLES
-# ─────────────────────────────────────────────
 DEFECT_WEIGHTS = {
     "Longitudinal Crack": 1.0,
     "Alligator (Fatigue) Crack": 2.0,
@@ -30,11 +24,9 @@ DEFECT_WEIGHTS = {
 }
 
 SEVERITY_FACTORS = {"Low": 0.6, "Medium": 1.0, "High": 1.4}
-
 DEFECT_LIST = list(DEFECT_WEIGHTS.keys())
 SEVERITY_LIST = ["Low", "Medium", "High"]
 
-# PCI classification
 def classify_pci(pci):
     if pci >= 85:
         return "Very Good", "#2ecc71"
@@ -55,7 +47,6 @@ def pci_recommendation(pci):
     else:
         return "Major rehabilitation / Reconstruction assessment"
 
-# IRI classification
 def classify_iri(iri):
     if iri < 2:
         return "Very Good (Smooth)", "#2ecc71"
@@ -76,7 +67,6 @@ def iri_recommendation(iri):
     else:
         return "Structural overlay / rehabilitation"
 
-# Hybrid: take the worse condition
 CONDITION_RANK = {
     "Very Good": 4, "Very Good (Smooth)": 4,
     "Good / Satisfactory": 3, "Good": 3,
@@ -98,11 +88,21 @@ def hybrid_recommendation(combined):
     else:
         return "Major rehabilitation / Reconstruction assessment"
 
-# ─────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────
+def color_condition(val):
+    colors = {
+        "Very Good": "background-color: #d5f5e3; color: #1e8449",
+        "Good / Satisfactory": "background-color: #d5f5e3; color: #1e8449",
+        "Good": "background-color: #d5f5e3; color: #1e8449",
+        "Very Good (Smooth)": "background-color: #d5f5e3; color: #1e8449",
+        "Fair": "background-color: #fef9e7; color: #d68910",
+        "Poor": "background-color: #fadbd8; color: #922b21",
+        "Poor (Rough)": "background-color: #fadbd8; color: #922b21"
+    }
+    return colors.get(val, "")
+
+# ── HEADER ──
 st.markdown("""
-<div style='background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460); 
+<div style='background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
             padding: 2rem; border-radius: 12px; margin-bottom: 1.5rem;'>
     <h1 style='color: white; margin:0; font-size: 2rem;'>🛣️ Digital Pavement Condition Evaluation Tool</h1>
     <p style='color: #a0aec0; margin: 0.5rem 0 0 0; font-size: 1rem;'>
@@ -111,9 +111,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# SIDEBAR – MODE & SETTINGS
-# ─────────────────────────────────────────────
+# ── SIDEBAR ──
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
     mode = st.radio("**Analysis Mode**", ["PCI Only", "IRI Only", "Hybrid (PCI + IRI)"], index=2)
@@ -125,7 +123,7 @@ with st.sidebar:
     st.markdown("""
 **PCI**
 - 85–100 → Very Good
-- 70–85 → Good / Satisfactory  
+- 70–85 → Good / Satisfactory
 - 55–70 → Fair
 - 0–55 → Poor
 
@@ -136,59 +134,178 @@ with st.sidebar:
 - >4 → Poor (Rough)
 """)
 
-# ─────────────────────────────────────────────
-# TABS
-# ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "🔀 Summary & Hybrid"])
+# ── TABS ──
+if mode == "PCI Only":
+    tab_labels = ["📥 Data Input", "📊 PCI Analysis"]
+elif mode == "IRI Only":
+    tab_labels = ["📥 Data Input", "📈 IRI Analysis"]
+else:
+    tab_labels = ["📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "🔀 Summary & Hybrid"]
+
+tabs = st.tabs(tab_labels)
 
 # ══════════════════════════════════════════════
 # TAB 1 – DATA INPUT
 # ══════════════════════════════════════════════
-with tab1:
+with tabs[0]:
     st.markdown("## 📥 Data Input")
-    col_pci, col_iri = st.columns(2)
 
-    # ── PCI INPUT ──
-    with col_pci:
-        st.markdown("### 🔍 PCI – Defect Survey Data")
-        st.caption("Enter one defect per section (100m). Area Affected = % of section area.")
+    # ── INPUT METHOD TOGGLE ──
+    input_method = st.radio(
+        "**Choose Input Method**",
+        ["📂 Upload Excel File", "✏️ Enter Data Manually"],
+        horizontal=True
+    )
+    st.markdown("---")
 
-        pci_data = []
-        for i in range(1, 11):
-            with st.expander(f"Section {i}", expanded=(i <= 3)):
-                c1, c2, c3 = st.columns(3)
-                defect = c1.selectbox("Defect Type", DEFECT_LIST, key=f"defect_{i}",
-                                      index=i - 1 if i <= len(DEFECT_LIST) else 0)
-                severity = c2.selectbox("Severity", SEVERITY_LIST, key=f"sev_{i}",
-                                        index=["Low", "Medium", "High"].index(
-                                            ["Low", "Medium", "High", "Medium", "High",
-                                             "Low", "High", "Medium", "Medium", "Medium"][i - 1]))
-                area = c3.number_input("Area (%)", min_value=0.0, max_value=100.0,
-                                       value=[5.0, 10.0, 25.0, 3.0, 18.0,
-                                              10.0, 8.0, 6.0, 6.0, 5.0][i - 1],
-                                       step=0.5, key=f"area_{i}")
-                pci_data.append({"Section": i, "Defect Type": defect,
-                                 "Severity": severity, "Area (%)": area})
+    pci_data = []
+    iri_data = []
 
-    # ── IRI INPUT ──
-    with col_iri:
-        st.markdown("### 📏 IRI – Roughness Measurements")
-        st.caption("Enter average IRI value (m/km) per 100m section.")
+    # ══════════════════════════════════════════
+    # OPTION A: UPLOAD EXCEL
+    # ══════════════════════════════════════════
+    if input_method == "📂 Upload Excel File":
+        st.markdown("### 📂 Upload Your Excel Dataset")
+        st.caption("Upload your TCG633 Excel file. The app will read the PCI_Input and IRI_Input sheets automatically.")
 
-        iri_defaults = [1.80, 2.05, 2.30, 2.55, 2.80, 3.05, 3.30, 3.55, 3.80, 4.05]
-        iri_data = []
-        for i in range(1, 11):
-            with st.expander(f"Section {i}", expanded=(i <= 3)):
-                iri_val = st.number_input(f"IRI (m/km)", min_value=0.0, max_value=20.0,
-                                          value=iri_defaults[i - 1], step=0.05,
-                                          key=f"iri_{i}")
-                iri_data.append({"Section": i, "IRI (m/km)": iri_val})
+        uploaded_file = st.file_uploader(
+            "Drop your Excel file here or click to browse",
+            type=["xlsx", "xls"],
+            help="Must contain sheets named 'PCI_Input' and 'IRI_Input'"
+        )
 
-    st.success("✅ Data saved! Navigate to the analysis tabs to view results.")
+        if uploaded_file is not None:
+            try:
+                xl = pd.ExcelFile(uploaded_file)
+                available_sheets = xl.sheet_names
+                st.success(f"✅ File uploaded! Sheets found: {', '.join(available_sheets)}")
 
-# ══════════════════════════════════════════════
-# COMPUTE PCI & IRI
-# ══════════════════════════════════════════════
+                col_pci, col_iri = st.columns(2)
+
+                # Read PCI_Input
+                with col_pci:
+                    if "PCI_Input" in available_sheets:
+                        df_pci_input = xl.parse("PCI_Input", header=None)
+
+                        # Find the header row
+                        header_row = None
+                        for idx, row in df_pci_input.iterrows():
+                            if any(str(cell).strip() == "Section ID" for cell in row):
+                                header_row = idx
+                                break
+
+                        if header_row is not None:
+                            df_pci_input.columns = df_pci_input.iloc[header_row]
+                            df_pci_input = df_pci_input.iloc[header_row+1:].reset_index(drop=True)
+                            df_pci_input = df_pci_input.dropna(subset=["Section ID"])
+                            df_pci_input = df_pci_input[df_pci_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
+                            df_pci_input = df_pci_input.head(10)
+
+                            st.markdown("### 🔍 PCI Data from Excel")
+                            st.dataframe(df_pci_input[["Section ID","Defect Type","Severity","Area Affected (%)"]].reset_index(drop=True),
+                                         use_container_width=True, hide_index=True)
+
+                            for _, row in df_pci_input.iterrows():
+                                try:
+                                    section = int(float(str(row["Section ID"]).strip()))
+                                    defect = str(row["Defect Type"]).strip()
+                                    severity = str(row["Severity"]).strip()
+                                    area = float(str(row["Area Affected (%)"]).strip()) if str(row["Area Affected (%)"]).strip() not in ["nan",""] else 0.0
+                                    if defect in DEFECT_WEIGHTS and severity in SEVERITY_FACTORS:
+                                        pci_data.append({"Section": section, "Defect Type": defect,
+                                                         "Severity": severity, "Area (%)": area})
+                                except:
+                                    continue
+                        else:
+                            st.warning("Could not find header row in PCI_Input sheet.")
+                    else:
+                        st.warning("PCI_Input sheet not found in uploaded file.")
+
+                # Read IRI_Input
+                with col_iri:
+                    if "IRI_Input" in available_sheets:
+                        df_iri_input = xl.parse("IRI_Input", header=None)
+
+                        header_row_iri = None
+                        for idx, row in df_iri_input.iterrows():
+                            if any(str(cell).strip() == "Section ID" for cell in row):
+                                header_row_iri = idx
+                                break
+
+                        if header_row_iri is not None:
+                            df_iri_input.columns = df_iri_input.iloc[header_row_iri]
+                            df_iri_input = df_iri_input.iloc[header_row_iri+1:].reset_index(drop=True)
+                            df_iri_input = df_iri_input.dropna(subset=["Section ID"])
+                            df_iri_input = df_iri_input[df_iri_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
+                            df_iri_input = df_iri_input.head(10)
+
+                            # Average IRI per section
+                            df_iri_input["Section ID"] = df_iri_input["Section ID"].astype(float).astype(int)
+                            df_iri_input["IRI (m/km)"] = pd.to_numeric(df_iri_input["IRI (m/km)"], errors="coerce")
+                            iri_avg = df_iri_input.groupby("Section ID")["IRI (m/km)"].mean().reset_index()
+                            iri_avg.columns = ["Section", "IRI (m/km)"]
+
+                            st.markdown("### 📏 IRI Data from Excel")
+                            st.dataframe(iri_avg, use_container_width=True, hide_index=True)
+
+                            for _, row in iri_avg.iterrows():
+                                iri_data.append({"Section": int(row["Section"]),
+                                                 "IRI (m/km)": float(row["IRI (m/km)"])})
+                        else:
+                            st.warning("Could not find header row in IRI_Input sheet.")
+                    else:
+                        st.warning("IRI_Input sheet not found in uploaded file.")
+
+                if pci_data and iri_data:
+                    st.success("✅ Data loaded successfully! Navigate to the analysis tabs to view results.")
+                else:
+                    st.error("❌ Could not load data. Please check your Excel file format.")
+
+            except Exception as e:
+                st.error(f"❌ Error reading file: {str(e)}")
+        else:
+            st.info("👆 Please upload your Excel file to proceed.")
+
+    # ══════════════════════════════════════════
+    # OPTION B: MANUAL INPUT
+    # ══════════════════════════════════════════
+    else:
+        st.markdown("### ✏️ Enter Data Manually")
+        col_pci, col_iri = st.columns(2)
+
+        with col_pci:
+            st.markdown("#### 🔍 PCI – Defect Survey Data")
+            st.caption("Enter one defect per section (100m). Area Affected = % of section area.")
+            defect_defaults = ["Longitudinal Crack","Alligator (Fatigue) Crack","Block Crack","Potholes",
+                               "Raveling","Patching","Bleeding/Flushing","Shoving",
+                               "Spalling of Longitudinal Joint","Spalling of Transverse Joints"]
+            sev_defaults = ["Low","Medium","High","Medium","High","Low","High","Medium","Medium","Medium"]
+            area_defaults = [5.0,10.0,25.0,3.0,18.0,10.0,8.0,6.0,6.0,5.0]
+            for i in range(1, 11):
+                with st.expander(f"Section {i}", expanded=(i <= 3)):
+                    c1, c2, c3 = st.columns(3)
+                    defect = c1.selectbox("Defect Type", DEFECT_LIST, key=f"defect_{i}",
+                                          index=DEFECT_LIST.index(defect_defaults[i-1]))
+                    severity = c2.selectbox("Severity", SEVERITY_LIST, key=f"sev_{i}",
+                                            index=SEVERITY_LIST.index(sev_defaults[i-1]))
+                    area = c3.number_input("Area (%)", min_value=0.0, max_value=100.0,
+                                           value=area_defaults[i-1], step=0.5, key=f"area_{i}")
+                    pci_data.append({"Section": i, "Defect Type": defect,
+                                     "Severity": severity, "Area (%)": area})
+
+        with col_iri:
+            st.markdown("#### 📏 IRI – Roughness Measurements")
+            st.caption("Enter average IRI value (m/km) per 100m section.")
+            iri_defaults = [1.80,2.05,2.30,2.55,2.80,3.05,3.30,3.55,3.80,4.05]
+            for i in range(1, 11):
+                with st.expander(f"Section {i}", expanded=(i <= 3)):
+                    iri_val = st.number_input("IRI (m/km)", min_value=0.0, max_value=20.0,
+                                              value=iri_defaults[i-1], step=0.05, key=f"iri_{i}")
+                    iri_data.append({"Section": i, "IRI (m/km)": iri_val})
+
+        st.success("✅ Data saved! Navigate to the analysis tabs to view results.")
+
+# ── COMPUTE ──
 pci_results = []
 for row in pci_data:
     w = DEFECT_WEIGHTS.get(row["Defect Type"], 1.0)
@@ -196,266 +313,197 @@ for row in pci_data:
     deduct = row["Area (%)"] * w * sf
     pci = max(0, 100 - deduct)
     condition, color = classify_pci(pci)
-    rec = pci_recommendation(pci)
     pci_results.append({
-        "Section": row["Section"],
-        "Defect Type": row["Defect Type"],
-        "Severity": row["Severity"],
-        "Area (%)": row["Area (%)"],
-        "Weighting": w,
-        "Severity Factor": sf,
-        "Deduct Value": round(deduct, 2),
-        "PCI": round(pci, 2),
-        "Condition": condition,
-        "Color": color,
-        "Recommendation": rec
+        "Section": row["Section"], "Defect Type": row["Defect Type"],
+        "Severity": row["Severity"], "Area (%)": row["Area (%)"],
+        "Weighting": w, "Severity Factor": sf, "Deduct Value": round(deduct, 2),
+        "PCI": round(pci, 2), "Condition": condition, "Color": color,
+        "Recommendation": pci_recommendation(pci)
     })
 
 iri_results = []
 for row in iri_data:
     condition, color = classify_iri(row["IRI (m/km)"])
-    rec = iri_recommendation(row["IRI (m/km)"])
     iri_results.append({
-        "Section": row["Section"],
-        "IRI (m/km)": row["IRI (m/km)"],
-        "Condition": condition,
-        "Color": color,
-        "Recommendation": rec
+        "Section": row["Section"], "IRI (m/km)": row["IRI (m/km)"],
+        "Condition": condition, "Color": color,
+        "Recommendation": iri_recommendation(row["IRI (m/km)"])
     })
 
-df_pci = pd.DataFrame(pci_results)
-df_iri = pd.DataFrame(iri_results)
+df_pci = pd.DataFrame(pci_results) if pci_results else pd.DataFrame()
+df_iri = pd.DataFrame(iri_results) if iri_results else pd.DataFrame()
 
 # ══════════════════════════════════════════════
-# TAB 2 – PCI ANALYSIS
+# PCI TAB
 # ══════════════════════════════════════════════
-with tab2:
-    st.markdown("## 📊 PCI Analysis Results")
-
-    # KPI cards
-    avg_pci = df_pci["PCI"].mean()
-    worst = df_pci.loc[df_pci["PCI"].idxmin()]
-    best = df_pci.loc[df_pci["PCI"].idxmax()]
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Average PCI", f"{avg_pci:.1f}", help="Average across all 10 sections")
-    k2.metric("Best Section", f"S{int(best['Section'])} ({best['PCI']:.1f})")
-    k3.metric("Worst Section", f"S{int(worst['Section'])} ({worst['PCI']:.1f})")
-    poor_count = len(df_pci[df_pci["Condition"].isin(["Poor", "Fair"])])
-    k4.metric("Sections Needing Attention", f"{poor_count}/10")
-
-    st.markdown("---")
-    col1, col2 = st.columns([3, 2])
-
-    with col1:
-        st.markdown("### PCI Score by Section")
-        fig_bar = go.Figure()
-        for _, row in df_pci.iterrows():
-            fig_bar.add_trace(go.Bar(
-                x=[f"S{int(row['Section'])}"],
-                y=[row["PCI"]],
-                marker_color=row["Color"],
-                name=row["Condition"],
-                showlegend=False,
-                text=[f"{row['PCI']:.1f}"],
-                textposition="outside"
-            ))
-        fig_bar.add_hline(y=85, line_dash="dash", line_color="#2ecc71", annotation_text="Very Good (85)")
-        fig_bar.add_hline(y=70, line_dash="dash", line_color="#f39c12", annotation_text="Good (70)")
-        fig_bar.add_hline(y=55, line_dash="dash", line_color="#e74c3c", annotation_text="Fair (55)")
-        fig_bar.update_layout(yaxis_range=[0, 110], yaxis_title="PCI Score",
-                               xaxis_title="Section", height=400,
-                               plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    with col2:
-        st.markdown("### Condition Distribution")
-        cond_counts = df_pci["Condition"].value_counts().reset_index()
-        cond_counts.columns = ["Condition", "Count"]
-        color_map = {"Very Good": "#2ecc71", "Good / Satisfactory": "#27ae60",
-                     "Fair": "#f39c12", "Poor": "#e74c3c"}
-        fig_pie = px.pie(cond_counts, names="Condition", values="Count",
-                         color="Condition", color_discrete_map=color_map, hole=0.4)
-        fig_pie.update_layout(height=400, paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    st.markdown("### 📋 PCI Computation Table")
-    display_pci = df_pci[["Section", "Defect Type", "Severity", "Area (%)",
-                            "Weighting", "Severity Factor", "Deduct Value", "PCI", "Condition", "Recommendation"]].copy()
-
-    def color_condition(val):
-        colors = {"Very Good": "background-color: #d5f5e3; color: #1e8449",
-                  "Good / Satisfactory": "background-color: #d5f5e3; color: #1e8449",
-                  "Fair": "background-color: #fef9e7; color: #d68910",
-                  "Poor": "background-color: #fadbd8; color: #922b21"}
-        return colors.get(val, "")
-
-    styled = display_pci.style.map(color_condition, subset=["Condition"])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
+    pci_tab = tabs[1]
+    with pci_tab:
+        st.markdown("## 📊 PCI Analysis Results")
+        if df_pci.empty:
+            st.warning("⚠️ No PCI data available. Please upload a file or enter data manually in the Data Input tab.")
+        else:
+            avg_pci = df_pci["PCI"].mean()
+            worst = df_pci.loc[df_pci["PCI"].idxmin()]
+            best = df_pci.loc[df_pci["PCI"].idxmax()]
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Average PCI", f"{avg_pci:.1f}")
+            k2.metric("Best Section", f"S{int(best['Section'])} ({best['PCI']:.1f})")
+            k3.metric("Worst Section", f"S{int(worst['Section'])} ({worst['PCI']:.1f})")
+            k4.metric("Sections Needing Attention", f"{len(df_pci[df_pci['Condition'].isin(['Poor','Fair'])])}/10")
+            st.markdown("---")
+            col1, col2 = st.columns([3, 2])
+            with col1:
+                st.markdown("### PCI Score by Section")
+                fig_bar = go.Figure()
+                for _, row in df_pci.iterrows():
+                    fig_bar.add_trace(go.Bar(x=[f"S{int(row['Section'])}"], y=[row["PCI"]],
+                        marker_color=row["Color"], showlegend=False,
+                        text=[f"{row['PCI']:.1f}"], textposition="outside"))
+                fig_bar.add_hline(y=85, line_dash="dash", line_color="#2ecc71", annotation_text="Very Good (85)")
+                fig_bar.add_hline(y=70, line_dash="dash", line_color="#f39c12", annotation_text="Good (70)")
+                fig_bar.add_hline(y=55, line_dash="dash", line_color="#e74c3c", annotation_text="Fair (55)")
+                fig_bar.update_layout(yaxis_range=[0,110], yaxis_title="PCI Score",
+                                      xaxis_title="Section", height=400,
+                                      plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            with col2:
+                st.markdown("### Condition Distribution")
+                cond_counts = df_pci["Condition"].value_counts().reset_index()
+                cond_counts.columns = ["Condition", "Count"]
+                fig_pie = px.pie(cond_counts, names="Condition", values="Count", color="Condition",
+                                 color_discrete_map={"Very Good":"#2ecc71","Good / Satisfactory":"#27ae60",
+                                                     "Fair":"#f39c12","Poor":"#e74c3c"}, hole=0.4)
+                fig_pie.update_layout(height=400, paper_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_pie, use_container_width=True)
+            st.markdown("### 📋 PCI Computation Table")
+            display_pci = df_pci[["Section","Defect Type","Severity","Area (%)","Weighting",
+                                   "Severity Factor","Deduct Value","PCI","Condition","Recommendation"]].copy()
+            styled = display_pci.style.map(color_condition, subset=["Condition"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
-# TAB 3 – IRI ANALYSIS
+# IRI TAB
 # ══════════════════════════════════════════════
-with tab3:
-    st.markdown("## 📈 IRI Analysis Results")
+if mode == "IRI Only":
+    iri_tab = tabs[1]
+elif mode == "Hybrid (PCI + IRI)":
+    iri_tab = tabs[2]
+else:
+    iri_tab = None
 
-    avg_iri = df_iri["IRI (m/km)"].mean()
-    worst_iri = df_iri.loc[df_iri["IRI (m/km)"].idxmax()]
-    best_iri = df_iri.loc[df_iri["IRI (m/km)"].idxmin()]
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Average IRI", f"{avg_iri:.2f} m/km")
-    k2.metric("Smoothest Section", f"S{int(best_iri['Section'])} ({best_iri['IRI (m/km)']:.2f})")
-    k3.metric("Roughest Section", f"S{int(worst_iri['Section'])} ({worst_iri['IRI (m/km)']:.2f})")
-    rough_count = len(df_iri[df_iri["Condition"].isin(["Poor (Rough)", "Fair"])])
-    k4.metric("Sections Needing Attention", f"{rough_count}/10")
-
-    st.markdown("---")
-    col1, col2 = st.columns([3, 2])
-
-    with col1:
-        st.markdown("### IRI Profile Along Road")
-        fig_line = go.Figure()
-        fig_line.add_trace(go.Scatter(
-            x=[f"S{int(r['Section'])}" for _, r in df_iri.iterrows()],
-            y=df_iri["IRI (m/km)"],
-            mode="lines+markers+text",
-            text=[f"{v:.2f}" for v in df_iri["IRI (m/km)"]],
-            textposition="top center",
-            marker=dict(color=[r["Color"] for _, r in df_iri.iterrows()], size=12),
-            line=dict(color="#3498db", width=2)
-        ))
-        fig_line.add_hrect(y0=0, y1=2, fillcolor="#2ecc71", opacity=0.1, annotation_text="Very Good")
-        fig_line.add_hrect(y0=2, y1=3, fillcolor="#f1c40f", opacity=0.1, annotation_text="Good")
-        fig_line.add_hrect(y0=3, y1=4, fillcolor="#e67e22", opacity=0.1, annotation_text="Fair")
-        fig_line.add_hrect(y0=4, y1=10, fillcolor="#e74c3c", opacity=0.1, annotation_text="Poor")
-        fig_line.update_layout(yaxis_title="IRI (m/km)", xaxis_title="Section",
-                                height=400, plot_bgcolor="rgba(0,0,0,0)",
-                                paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_line, use_container_width=True)
-
-    with col2:
-        st.markdown("### Condition Distribution")
-        iri_cond_counts = df_iri["Condition"].value_counts().reset_index()
-        iri_cond_counts.columns = ["Condition", "Count"]
-        iri_color_map = {"Very Good (Smooth)": "#2ecc71", "Good": "#27ae60",
-                         "Fair": "#f39c12", "Poor (Rough)": "#e74c3c"}
-        fig_pie2 = px.pie(iri_cond_counts, names="Condition", values="Count",
-                          color="Condition", color_discrete_map=iri_color_map, hole=0.4)
-        fig_pie2.update_layout(height=400, paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_pie2, use_container_width=True)
-
-    st.markdown("### 📋 IRI Results Table")
-    display_iri = df_iri[["Section", "IRI (m/km)", "Condition", "Recommendation"]].copy()
-
-    def color_iri_condition(val):
-        colors = {"Very Good (Smooth)": "background-color: #d5f5e3; color: #1e8449",
-                  "Good": "background-color: #d5f5e3; color: #1e8449",
-                  "Fair": "background-color: #fef9e7; color: #d68910",
-                  "Poor (Rough)": "background-color: #fadbd8; color: #922b21"}
-        return colors.get(val, "")
-
-    styled_iri = display_iri.style.map(color_iri_condition, subset=["Condition"])
-    st.dataframe(styled_iri, use_container_width=True, hide_index=True)
+if iri_tab:
+    with iri_tab:
+        st.markdown("## 📈 IRI Analysis Results")
+        if df_iri.empty:
+            st.warning("⚠️ No IRI data available. Please upload a file or enter data manually in the Data Input tab.")
+        else:
+            avg_iri = df_iri["IRI (m/km)"].mean()
+            worst_iri = df_iri.loc[df_iri["IRI (m/km)"].idxmax()]
+            best_iri = df_iri.loc[df_iri["IRI (m/km)"].idxmin()]
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Average IRI", f"{avg_iri:.2f} m/km")
+            k2.metric("Smoothest Section", f"S{int(best_iri['Section'])} ({best_iri['IRI (m/km)']:.2f})")
+            k3.metric("Roughest Section", f"S{int(worst_iri['Section'])} ({worst_iri['IRI (m/km)']:.2f})")
+            k4.metric("Sections Needing Attention", f"{len(df_iri[df_iri['Condition'].isin(['Poor (Rough)','Fair'])])}/10")
+            st.markdown("---")
+            col1, col2 = st.columns([3, 2])
+            with col1:
+                st.markdown("### IRI Profile Along Road")
+                fig_line = go.Figure()
+                fig_line.add_trace(go.Scatter(
+                    x=[f"S{int(r['Section'])}" for _, r in df_iri.iterrows()],
+                    y=df_iri["IRI (m/km)"], mode="lines+markers+text",
+                    text=[f"{v:.2f}" for v in df_iri["IRI (m/km)"]],
+                    textposition="top center",
+                    marker=dict(color=[r["Color"] for _, r in df_iri.iterrows()], size=12),
+                    line=dict(color="#3498db", width=2)))
+                fig_line.add_hrect(y0=0, y1=2, fillcolor="#2ecc71", opacity=0.1, annotation_text="Very Good")
+                fig_line.add_hrect(y0=2, y1=3, fillcolor="#f1c40f", opacity=0.1, annotation_text="Good")
+                fig_line.add_hrect(y0=3, y1=4, fillcolor="#e67e22", opacity=0.1, annotation_text="Fair")
+                fig_line.add_hrect(y0=4, y1=10, fillcolor="#e74c3c", opacity=0.1, annotation_text="Poor")
+                fig_line.update_layout(yaxis_title="IRI (m/km)", xaxis_title="Section",
+                                       height=400, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_line, use_container_width=True)
+            with col2:
+                st.markdown("### Condition Distribution")
+                iri_cond_counts = df_iri["Condition"].value_counts().reset_index()
+                iri_cond_counts.columns = ["Condition", "Count"]
+                fig_pie2 = px.pie(iri_cond_counts, names="Condition", values="Count", color="Condition",
+                                  color_discrete_map={"Very Good (Smooth)":"#2ecc71","Good":"#27ae60",
+                                                      "Fair":"#f39c12","Poor (Rough)":"#e74c3c"}, hole=0.4)
+                fig_pie2.update_layout(height=400, paper_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_pie2, use_container_width=True)
+            st.markdown("### 📋 IRI Results Table")
+            display_iri = df_iri[["Section","IRI (m/km)","Condition","Recommendation"]].copy()
+            styled_iri = display_iri.style.map(color_condition, subset=["Condition"])
+            st.dataframe(styled_iri, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
-# TAB 4 – SUMMARY & HYBRID
+# HYBRID TAB
 # ══════════════════════════════════════════════
-with tab4:
-    st.markdown("## 🔀 Summary & Hybrid Index")
+if mode == "Hybrid (PCI + IRI)":
+    with tabs[3]:
+        st.markdown("## 🔀 Summary & Hybrid Index")
+        if df_pci.empty or df_iri.empty:
+            st.warning("⚠️ Both PCI and IRI data are required for Hybrid analysis.")
+        else:
+            hybrid_rows = []
+            for i in range(len(pci_results)):
+                p = pci_results[i]
+                r = iri_results[i] if i < len(iri_results) else {"IRI (m/km)": 0, "Condition": "Very Good (Smooth)"}
+                combined = hybrid_condition(p["Condition"], r["Condition"])
+                hybrid_rows.append({
+                    "Section": p["Section"], "PCI": p["PCI"], "PCI Class": p["Condition"],
+                    "IRI (m/km)": r["IRI (m/km)"], "IRI Class": r["Condition"],
+                    "Combined Condition": combined, "Maintenance Recommendation": hybrid_recommendation(combined)
+                })
+            df_hybrid = pd.DataFrame(hybrid_rows)
 
-    # Build hybrid table
-    hybrid_rows = []
-    for i in range(10):
-        p = pci_results[i]
-        r = iri_results[i]
-        combined = hybrid_condition(p["Condition"], r["Condition"])
-        rec = hybrid_recommendation(combined)
-        hybrid_rows.append({
-            "Section": p["Section"],
-            "PCI": p["PCI"],
-            "PCI Class": p["Condition"],
-            "IRI (m/km)": r["IRI (m/km)"],
-            "IRI Class": r["Condition"],
-            "Combined Condition": combined,
-            "Maintenance Recommendation": rec
-        })
-    df_hybrid = pd.DataFrame(hybrid_rows)
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Network Avg PCI", f"{df_hybrid['PCI'].mean():.1f}")
+            k2.metric("Network Avg IRI", f"{df_hybrid['IRI (m/km)'].mean():.2f} m/km")
+            critical = len(df_hybrid[df_hybrid["Combined Condition"].isin(["Poor","Poor (Rough)"])])
+            k3.metric("Critical Sections", f"{critical}/10")
 
-    # Overall network health
-    st.markdown("### 🏥 Network Health Overview")
-    k1, k2, k3 = st.columns(3)
-    avg_pci2 = df_hybrid["PCI"].mean()
-    avg_iri2 = df_hybrid["IRI (m/km)"].mean()
-    critical = len(df_hybrid[df_hybrid["Combined Condition"].isin(["Poor", "Poor (Rough)"])])
-    k1.metric("Network Avg PCI", f"{avg_pci2:.1f}")
-    k2.metric("Network Avg IRI", f"{avg_iri2:.2f} m/km")
-    k3.metric("Critical Sections", f"{critical}/10", delta=f"-{critical} need rehab" if critical else "All acceptable")
+            st.markdown("### PCI vs IRI Comparison")
+            fig_compare = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_compare.add_trace(go.Bar(
+                x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
+                y=df_hybrid["PCI"], name="PCI", marker_color="#3498db", opacity=0.8), secondary_y=False)
+            fig_compare.add_trace(go.Scatter(
+                x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
+                y=df_hybrid["IRI (m/km)"], name="IRI (m/km)",
+                mode="lines+markers", marker=dict(color="#e74c3c", size=10),
+                line=dict(color="#e74c3c", width=2)), secondary_y=True)
+            fig_compare.update_yaxes(title_text="PCI Score", secondary_y=False)
+            fig_compare.update_yaxes(title_text="IRI (m/km)", secondary_y=True)
+            fig_compare.update_layout(height=400, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig_compare, use_container_width=True)
 
-    st.markdown("---")
+            st.markdown("### 📋 Hybrid Summary Table")
+            styled_hybrid = df_hybrid.style.map(color_condition, subset=["PCI Class","IRI Class","Combined Condition"])
+            st.dataframe(styled_hybrid, use_container_width=True, hide_index=True)
 
-    # Side by side PCI vs IRI chart
-    st.markdown("### PCI vs IRI Comparison")
-    fig_compare = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_compare.add_trace(go.Bar(
-        x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
-        y=df_hybrid["PCI"], name="PCI", marker_color="#3498db", opacity=0.8
-    ), secondary_y=False)
-    fig_compare.add_trace(go.Scatter(
-        x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
-        y=df_hybrid["IRI (m/km)"], name="IRI (m/km)",
-        mode="lines+markers", marker=dict(color="#e74c3c", size=10),
-        line=dict(color="#e74c3c", width=2)
-    ), secondary_y=True)
-    fig_compare.update_yaxes(title_text="PCI Score", secondary_y=False)
-    fig_compare.update_yaxes(title_text="IRI (m/km)", secondary_y=True)
-    fig_compare.update_layout(height=400, plot_bgcolor="rgba(0,0,0,0)",
-                               paper_bgcolor="rgba(0,0,0,0)", legend=dict(x=0.01, y=0.99))
-    st.plotly_chart(fig_compare, use_container_width=True)
+            st.markdown("### 🔧 Maintenance Priority Plan")
+            priority_map = {"Poor":1,"Poor (Rough)":1,"Fair":2,"Good / Satisfactory":3,
+                            "Good":3,"Very Good":4,"Very Good (Smooth)":4}
+            df_hybrid["Priority"] = df_hybrid["Combined Condition"].map(priority_map)
+            df_priority = df_hybrid.sort_values("Priority").reset_index(drop=True)
+            df_priority["Priority Level"] = df_priority["Priority"].map(
+                {1:"🔴 Immediate",2:"🟡 Short-term",3:"🟢 Scheduled",4:"✅ Monitor only"})
+            for _, row in df_priority.iterrows():
+                with st.expander(f"{row['Priority Level']} — Section {int(row['Section'])} | {row['Combined Condition']}"):
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("PCI", f"{row['PCI']:.1f}")
+                    c2.metric("IRI", f"{row['IRI (m/km)']:.2f} m/km")
+                    c3.metric("Combined", row["Combined Condition"])
+                    st.info(f"**Recommended Action:** {row['Maintenance Recommendation']}")
 
-    st.markdown("### 📋 Hybrid Summary Table")
+            csv = df_hybrid.drop(columns=["Priority"]).to_csv(index=False)
+            st.download_button("⬇️ Download Summary as CSV", data=csv,
+                               file_name="TCG633_Pavement_Results.csv", mime="text/csv")
 
-    def color_combined(val):
-        colors = {
-            "Very Good": "background-color: #d5f5e3; color: #1e8449",
-            "Very Good (Smooth)": "background-color: #d5f5e3; color: #1e8449",
-            "Good / Satisfactory": "background-color: #d5f5e3; color: #1e8449",
-            "Good": "background-color: #d5f5e3; color: #1e8449",
-            "Fair": "background-color: #fef9e7; color: #d68910",
-            "Poor": "background-color: #fadbd8; color: #922b21",
-            "Poor (Rough)": "background-color: #fadbd8; color: #922b21"
-        }
-        return colors.get(val, "")
-
-    styled_hybrid = df_hybrid.style.map(color_combined, subset=["PCI Class", "IRI Class", "Combined Condition"])
-    st.dataframe(styled_hybrid, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    st.markdown("### 🔧 Maintenance Priority Plan")
-    priority_map = {"Poor": 1, "Poor (Rough)": 1, "Fair": 2, "Good / Satisfactory": 3,
-                    "Good": 3, "Very Good": 4, "Very Good (Smooth)": 4}
-    df_hybrid["Priority"] = df_hybrid["Combined Condition"].map(priority_map)
-    df_priority = df_hybrid.sort_values("Priority").reset_index(drop=True)
-    df_priority["Priority Level"] = df_priority["Priority"].map(
-        {1: "🔴 Immediate", 2: "🟡 Short-term", 3: "🟢 Scheduled", 4: "✅ Monitor only"})
-
-    for _, row in df_priority.iterrows():
-        with st.expander(f"{row['Priority Level']} — Section {int(row['Section'])} | {row['Combined Condition']}"):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("PCI", f"{row['PCI']:.1f}")
-            c2.metric("IRI", f"{row['IRI (m/km)']:.2f} m/km")
-            c3.metric("Combined", row["Combined Condition"])
-            st.info(f"**Recommended Action:** {row['Maintenance Recommendation']}")
-
-    st.markdown("---")
-    st.markdown("### 📥 Export Results")
-    csv = df_hybrid.drop(columns=["Priority"]).to_csv(index=False)
-    st.download_button("⬇️ Download Summary as CSV", data=csv,
-                       file_name="TCG633_Pavement_Results.csv", mime="text/csv")
-
-# ─────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #718096; font-size: 0.85rem;'>
