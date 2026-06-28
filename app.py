@@ -11,17 +11,37 @@ st.set_page_config(
 )
 
 DEFECT_WEIGHTS = {
-    "Longitudinal Crack": 1.0,
+    # Cracking
     "Alligator (Fatigue) Crack": 2.0,
     "Block Crack": 1.4,
-    "Potholes": 2.2,
-    "Raveling": 1.2,
-    "Patching": 1.5,
-    "Bleeding/Flushing": 1.0,
+    "Edge Crack": 1.1,
+    "Longitudinal Crack": 1.0,
+    "Reflection Crack at Joints": 1.2,
+    "Transverse Crack": 1.1,
+    # Surface deformation
+    "Corrugation": 1.5,
+    "Depression": 1.6,
+    "Rutting": 1.8,
     "Shoving": 1.8,
+    "Swells": 1.3,
+    "Bumps and Sags": 1.4,
+    # Surface defects
+    "Bleeding/Flushing": 1.0,
+    "Polished Aggregate": 0.8,
+    "Raveling": 1.2,
+    "Weathering": 1.0,
+    # Patches & joints
+    "Patching": 1.5,
+    "Railroad Crossing": 1.0,
     "Spalling of Longitudinal Joint": 1.3,
     "Spalling of Transverse Joints": 1.3,
+    # Other
+    "Potholes": 2.2,
+    "Lane/Shoulder Drop-off": 1.2,
+    "Other (Custom)": 1.0,  # fallback weight; user supplies name
 }
+
+DEFAULT_CUSTOM_WEIGHT = 1.0  # weight applied to any user-typed custom defect
 
 SEVERITY_FACTORS = {"Low": 0.6, "Medium": 1.0, "High": 1.4}
 DEFECT_LIST = list(DEFECT_WEIGHTS.keys())
@@ -277,7 +297,15 @@ with tabs[0]:
                 f_section = st.number_input("Section ID", min_value=1, max_value=999, value=1, step=1,
                                             help="Unique ID for each 100m road section")
                 f_defect = st.selectbox("Defect Type", DEFECT_LIST,
-                                        help="Select the primary defect observed in this section")
+                                        help="Select the primary defect observed in this section. Choose 'Other (Custom)' if your defect is not listed.")
+                f_custom_defect = ""
+                if f_defect == "Other (Custom)":
+                    f_custom_defect = st.text_input(
+                        "Custom Defect Name",
+                        placeholder="e.g. Depression, Delamination, Joint Failure…",
+                        help="Type in the exact defect name. A default weight of 1.0 will be applied."
+                    )
+                    st.caption("ℹ️ Custom defects use a default weighting of **1.0**. The PCI result is an estimate.")
                 f_severity = st.selectbox("Severity Level", SEVERITY_LIST,
                                           help="Low = minor, Medium = moderate, High = severe")
                 f_area = st.number_input("Area Affected (%)", min_value=0.0, max_value=100.0,
@@ -308,19 +336,25 @@ with tabs[0]:
             submitted = st.form_submit_button("➕ Add Section", use_container_width=True, type="primary")
 
         if submitted:
-            # Check for duplicate section ID
-            existing_ids = [s["Section"] for s in st.session_state.manual_sections]
-            if f_section in existing_ids:
-                st.warning(f"⚠️ Section {f_section} already exists. Please use a different Section ID or delete the existing entry first.")
+            # Resolve the actual defect name
+            actual_defect = f_custom_defect.strip() if f_defect == "Other (Custom)" and f_custom_defect.strip() else f_defect
+            if f_defect == "Other (Custom)" and not f_custom_defect.strip():
+                st.warning("⚠️ Please enter a custom defect name before adding.")
             else:
-                st.session_state.manual_sections.append({
-                    "Section": int(f_section),
-                    "Defect Type": f_defect,
-                    "Severity": f_severity,
-                    "Area (%)": f_area,
-                    "IRI (m/km)": f_iri,
-                })
-                st.success(f"✅ Section {f_section} added!")
+                # Check for duplicate section ID
+                existing_ids = [s["Section"] for s in st.session_state.manual_sections]
+                if f_section in existing_ids:
+                    st.warning(f"⚠️ Section {f_section} already exists. Please use a different Section ID or delete the existing entry first.")
+                else:
+                    st.session_state.manual_sections.append({
+                        "Section": int(f_section),
+                        "Defect Type": actual_defect,
+                        "Is Custom": f_defect == "Other (Custom)",
+                        "Severity": f_severity,
+                        "Area (%)": f_area,
+                        "IRI (m/km)": f_iri,
+                    })
+                    st.success(f"✅ Section {f_section} added! Defect: **{actual_defect}**")
 
         # ── SECTIONS TABLE ──
         st.markdown("---")
@@ -333,7 +367,7 @@ with tabs[0]:
 
             # Compute quick preview columns
             def quick_pci(row):
-                w = DEFECT_WEIGHTS.get(row["Defect Type"], 1.0)
+                w = DEFECT_WEIGHTS.get(row["Defect Type"], DEFAULT_CUSTOM_WEIGHT)
                 sf = SEVERITY_FACTORS.get(row["Severity"], 1.0)
                 return round(max(0, 100 - row["Area (%)"] * w * sf), 1)
 
@@ -392,7 +426,7 @@ with tabs[0]:
 # ── COMPUTE ──
 pci_results = []
 for row in pci_data:
-    w = DEFECT_WEIGHTS.get(row["Defect Type"], 1.0)
+    w = DEFECT_WEIGHTS.get(row["Defect Type"], DEFAULT_CUSTOM_WEIGHT)
     sf = SEVERITY_FACTORS.get(row["Severity"], 1.0)
     deduct = row["Area (%)"] * w * sf
     pci = max(0, 100 - deduct)
