@@ -159,18 +159,139 @@ if "manual_sections" not in st.session_state:
 
 # ── TABS ──
 if mode == "PCI Only":
-    tab_labels = ["📥 Data Input", "📊 PCI Analysis"]
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis"]
 elif mode == "IRI Only":
-    tab_labels = ["📥 Data Input", "📈 IRI Analysis"]
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📈 IRI Analysis"]
 else:
-    tab_labels = ["📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "🔀 Summary & Hybrid"]
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "🔀 Summary & Hybrid"]
 
 tabs = st.tabs(tab_labels)
 
 # ══════════════════════════════════════════════
-# TAB 1 – DATA INPUT
+# TAB 0 – HOW TO USE
 # ══════════════════════════════════════════════
 with tabs[0]:
+    st.markdown("## 📖 How to Use This App")
+    st.markdown("Welcome to the **TCG633 Digital Pavement Condition Evaluation Tool**. Follow the steps below to evaluate your road pavement condition using PCI and/or IRI data.")
+    st.markdown("---")
+
+    # STEP 1
+    st.markdown("""
+<div style='background:#eaf4fb; border-left:5px solid #3498db; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
+<h4 style='margin:0 0 0.5rem 0; color:#2471a3;'>Step 1 — Choose Your Analysis Mode</h4>
+<p style='margin:0; color:#1a252f;'>
+On the <b>left sidebar</b>, select one of three modes:<br><br>
+🔵 <b>PCI Only</b> — if you only have visual defect survey data<br>
+🔵 <b>IRI Only</b> — if you only have roughness measurement data<br>
+🔵 <b>Hybrid (PCI + IRI)</b> — recommended; combines both for a more complete picture
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    # STEP 2
+    st.markdown("""
+<div style='background:#eafaf1; border-left:5px solid #2ecc71; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
+<h4 style='margin:0 0 0.5rem 0; color:#1e8449;'>Step 2 — Enter Your Data</h4>
+<p style='margin:0; color:#1a252f;'>
+Go to the <b>📥 Data Input</b> tab. You have two options:<br><br>
+📂 <b>Upload Excel File</b> — upload a <code>.xlsx</code> file with sheets named <code>PCI_Input</code> and <code>IRI_Input</code>.<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• <code>PCI_Input</code> needs columns: <b>Section ID, Defect Type, Severity, Area Affected (%)</b><br>
+&nbsp;&nbsp;&nbsp;&nbsp;• <code>IRI_Input</code> needs columns: <b>Section ID, IRI (m/km)</b><br><br>
+✏️ <b>Enter Data Manually</b> — fill in the form one section at a time and click <b>Add Section</b>.<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• Each section needs: Section ID, Defect Type, Severity Level, Area Affected (%), and IRI value<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• You can delete a section by entering its ID and clicking Delete, or clear all with Clear All
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    # STEP 3
+    st.markdown("""
+<div style='background:#fef9e7; border-left:5px solid #f39c12; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
+<h4 style='margin:0 0 0.5rem 0; color:#d68910;'>Step 3 — View the Analysis</h4>
+<p style='margin:0; color:#1a252f;'>
+Once data is entered, navigate to the analysis tabs:<br><br>
+📊 <b>PCI Analysis</b> — shows PCI scores per section, a condition distribution pie chart, and a full computation table<br>
+📈 <b>IRI Analysis</b> — shows the IRI roughness profile, condition zones, and results table<br>
+🔀 <b>Summary & Hybrid</b> — combines both into one overall condition rating per section with a maintenance priority plan
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    # STEP 4
+    st.markdown("""
+<div style='background:#fdf2f8; border-left:5px solid #8e44ad; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
+<h4 style='margin:0 0 0.5rem 0; color:#6c3483;'>Step 4 — Read the Results</h4>
+<p style='margin:0; color:#1a252f;'>
+Each section is rated using colour-coded conditions:<br><br>
+🟢 <b>Very Good (PCI 85–100 / IRI &lt; 2.0)</b> — Routine maintenance only<br>
+🟢 <b>Good / Satisfactory (PCI 70–84 / IRI 2.0–3.0)</b> — Preventive maintenance (crack sealing, patching)<br>
+🟡 <b>Fair (PCI 55–69 / IRI 3.0–4.0)</b> — Surface treatment or localized overlay needed<br>
+🔴 <b>Poor (PCI &lt; 55 / IRI &gt; 4.0)</b> — Major rehabilitation or reconstruction required<br><br>
+In <b>Hybrid mode</b>, the combined condition is always the <b>worse</b> of PCI and IRI — the conservative approach used in JKR assessments.
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    # STEP 5
+    st.markdown("""
+<div style='background:#f2f3f4; border-left:5px solid #7f8c8d; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
+<h4 style='margin:0 0 0.5rem 0; color:#515a5a;'>Step 5 — Export Your Results</h4>
+<p style='margin:0; color:#1a252f;'>
+In the <b>🔀 Summary & Hybrid</b> tab, click <b>⬇️ Download Summary as CSV</b> to save your results for reporting or further analysis.
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### ❓ Frequently Asked Questions")
+
+    with st.expander("What is PCI?"):
+        st.markdown("""
+**Pavement Condition Index (PCI)** is a numerical rating from **0 to 100** that describes the surface condition of a road section based on visual inspection of defects.
+- It is defined by **ASTM D6433** and used worldwide including under **JKR Malaysia** standards.
+- Inspectors identify defect types (e.g. cracks, potholes, raveling), their severity (Low/Medium/High), and the area affected.
+- The app calculates: `PCI = 100 − (Area % × Defect Weight × Severity Factor)`
+""")
+
+    with st.expander("What is IRI?"):
+        st.markdown("""
+**International Roughness Index (IRI)** measures road surface roughness in **m/km** (metres per kilometre).
+- A lower IRI means a smoother road. A higher IRI means a rougher, bumpier surface.
+- It is typically measured using a profilometer or smartphone-based tools.
+- IRI < 2.0 is considered very smooth (like a new highway); IRI > 4.0 indicates a road needing urgent attention.
+""")
+
+    with st.expander("What does Hybrid mode do?"):
+        st.markdown("""
+Hybrid mode combines PCI and IRI into a single **Combined Condition** rating.
+- The app compares the condition class of PCI and IRI for each section.
+- It always picks the **worse** of the two — this is the conservative approach recommended by JKR.
+- Example: If PCI = Very Good but IRI = Fair, the Combined Condition = **Fair**.
+""")
+
+    with st.expander("Can I enter my own defect types?"):
+        st.markdown("""
+Yes! In the manual entry form, the **Defect Type** dropdown includes 22 standard ASTM D6433 defect types.
+If your defect is not listed, select **Other (Custom)** and type the name manually.
+A default weight of **1.0** will be applied — the PCI result will be an estimate.
+""")
+
+    with st.expander("Why does my Excel file not load all sections?"):
+        st.markdown("""
+Make sure your Excel file:
+- Has sheets named exactly **`PCI_Input`** and **`IRI_Input`** (case-sensitive)
+- Has a header row with columns: **Section ID**, **Defect Type**, **Severity**, **Area Affected (%)**
+- Uses **Section ID** as a plain number (e.g. 1, 2, 3 — not "Section 1")
+- Uses **Severity** values of exactly: `Low`, `Medium`, or `High`
+
+If a row is skipped, the app will show a warning message explaining why.
+""")
+
+
+# ══════════════════════════════════════════════
+# TAB 1 – DATA INPUT
+# ══════════════════════════════════════════════
+with tabs[1]:
     st.markdown("## 📥 Data Input")
 
     input_method = st.radio(
@@ -216,21 +337,27 @@ with tabs[0]:
                             df_pci_input.columns = df_pci_input.iloc[header_row]
                             df_pci_input = df_pci_input.iloc[header_row+1:].reset_index(drop=True)
                             df_pci_input = df_pci_input.dropna(subset=["Section ID"])
-                            df_pci_input = df_pci_input[df_pci_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
+                            df_pci_input = df_pci_input[df_pci_input["Section ID"].astype(str).str.strip().str.match(r'^\d+(\.\d+)?$')]
                             st.markdown("### 🔍 PCI Data from Excel")
                             st.dataframe(df_pci_input[["Section ID","Defect Type","Severity","Area Affected (%)"]].reset_index(drop=True),
                                          use_container_width=True, hide_index=True)
+                            skipped_pci = []
                             for _, row in df_pci_input.iterrows():
                                 try:
                                     section = int(float(str(row["Section ID"]).strip()))
                                     defect = str(row["Defect Type"]).strip()
-                                    severity = str(row["Severity"]).strip()
+                                    severity = str(row["Severity"]).strip().capitalize()
                                     area = float(str(row["Area Affected (%)"]).strip()) if str(row["Area Affected (%)"]).strip() not in ["nan",""] else 0.0
-                                    if defect in DEFECT_WEIGHTS and severity in SEVERITY_FACTORS:
-                                        pci_data.append({"Section": section, "Defect Type": defect,
-                                                         "Severity": severity, "Area (%)": area})
-                                except:
+                                    if severity not in SEVERITY_FACTORS:
+                                        skipped_pci.append(f"S{section}: unrecognised severity '{severity}' (use Low/Medium/High)")
+                                        continue
+                                    pci_data.append({"Section": section, "Defect Type": defect,
+                                                     "Severity": severity, "Area (%)": area})
+                                except Exception as ex:
+                                    skipped_pci.append(f"Row skipped: {ex}")
                                     continue
+                            if skipped_pci:
+                                st.warning("\u26a0\ufe0f Some PCI rows were skipped:\n" + "\n".join(f"- {s}" for s in skipped_pci))
                         else:
                             st.warning("Could not find header row in PCI_Input sheet.")
                     else:
@@ -248,7 +375,7 @@ with tabs[0]:
                             df_iri_input.columns = df_iri_input.iloc[header_row_iri]
                             df_iri_input = df_iri_input.iloc[header_row_iri+1:].reset_index(drop=True)
                             df_iri_input = df_iri_input.dropna(subset=["Section ID"])
-                            df_iri_input = df_iri_input[df_iri_input["Section ID"].astype(str).str.strip().str.match(r'^\d+$')]
+                            df_iri_input = df_iri_input[df_iri_input["Section ID"].astype(str).str.strip().str.match(r'^\d+(\.\d+)?$')]
                             df_iri_input["Section ID"] = df_iri_input["Section ID"].astype(float).astype(int)
                             df_iri_input["IRI (m/km)"] = pd.to_numeric(df_iri_input["IRI (m/km)"], errors="coerce")
                             iri_avg = df_iri_input.groupby("Section ID")["IRI (m/km)"].mean().reset_index()
@@ -523,7 +650,7 @@ def benchmark_table_iri():
 # PCI TAB
 # ══════════════════════════════════════════════
 if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
-    pci_tab = tabs[1]
+    pci_tab = tabs[2]
     with pci_tab:
         st.markdown("## 📊 PCI Analysis Results")
         if df_pci.empty:
@@ -593,9 +720,9 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
 # IRI TAB
 # ══════════════════════════════════════════════
 if mode == "IRI Only":
-    iri_tab = tabs[1]
-elif mode == "Hybrid (PCI + IRI)":
     iri_tab = tabs[2]
+elif mode == "Hybrid (PCI + IRI)":
+    iri_tab = tabs[3]
 else:
     iri_tab = None
 
@@ -677,7 +804,7 @@ if iri_tab:
 # HYBRID TAB
 # ══════════════════════════════════════════════
 if mode == "Hybrid (PCI + IRI)":
-    with tabs[3]:
+    with tabs[4]:
         st.markdown("## 🔀 Summary & Hybrid Index")
         if df_pci.empty or df_iri.empty:
             st.warning("⚠️ Both PCI and IRI data are required for Hybrid analysis.")
