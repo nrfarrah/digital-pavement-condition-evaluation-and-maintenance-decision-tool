@@ -527,6 +527,9 @@ with tabs[1]:
     else:
         st.markdown("### ✏️ Add / Edit a Section")
 
+        if st.session_state.get("section_form_flash"):
+            st.success(st.session_state.pop("section_form_flash"))
+
         edit_data = None
         if st.session_state.edit_target is not None:
             target_road, target_sec = st.session_state.edit_target
@@ -537,6 +540,9 @@ with tabs[1]:
             st.info(f"✏️ Editing **Section {edit_data['Section']} — {edit_data['Road Name']}**. Update the fields below and click **Update Section**.")
             if st.button("✖️ Cancel Edit"):
                 st.session_state.edit_target = None
+                for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                          "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                    st.session_state.pop(_k, None)
                 st.rerun()
         else:
             st.caption("Fill in every field, then click **Add Section**. Road Name, Section ID, PCI info, and IRI info are all required before you can proceed. "
@@ -549,17 +555,20 @@ with tabs[1]:
         default_severity_index = SEVERITY_LIST.index(edit_data["Severity"]) if edit_data else 0
 
         # ── ENTRY FORM ──
-        with st.form("section_form", clear_on_submit=not edit_data):
+        # clear_on_submit is OFF on purpose: if validation fails (e.g. IRI left blank),
+        # we want the fields the user already filled in to stay put, not get wiped.
+        # Fields are only cleared manually after a successful save (see below).
+        with st.form("section_form", clear_on_submit=False):
             st.markdown("#### 📋 Section Entry Form")
 
             st.markdown("**🛣️ Location Info**")
             loc1, loc2 = st.columns(2)
             with loc1:
                 f_road_name = st.text_input("Road Name", value=edit_data["Road Name"] if edit_data else "",
-                                            placeholder="e.g. Jalan Datuk Mohd Musa")
+                                            placeholder="e.g. Jalan Datuk Mohd Musa", key="f_road_name")
             with loc2:
                 f_section_str = st.text_input("Section ID (number)", value=str(edit_data["Section"]) if edit_data else "",
-                                              placeholder="e.g. 1")
+                                              placeholder="e.g. 1", key="f_section_str")
                 st.caption("ℹ️ The same Section ID can be reused for a different Road Name.")
 
             col1, col2 = st.columns(2)
@@ -567,27 +576,30 @@ with tabs[1]:
             with col1:
                 st.markdown("**🔍 PCI – Defect Info**")
                 f_defect = st.selectbox("Defect Type", DEFECT_LIST, index=default_defect_index,
-                                        help="Select the primary defect observed in this section. Choose 'Other (Custom)' if your defect is not listed.")
+                                        help="Select the primary defect observed in this section. Choose 'Other (Custom)' if your defect is not listed.",
+                                        key="f_defect")
                 f_custom_defect = ""
                 if f_defect == "Other (Custom)":
                     f_custom_defect = st.text_input(
                         "Custom Defect Name",
                         value=edit_data["Defect Type"] if edit_data and edit_data.get("Is Custom") else "",
                         placeholder="e.g. Depression, Delamination, Joint Failure…",
-                        help="Type in the exact defect name. A default weight of 1.0 will be applied."
+                        help="Type in the exact defect name. A default weight of 1.0 will be applied.",
+                        key="f_custom_defect"
                     )
                     st.caption("ℹ️ Custom defects use a default weighting of **1.0**. The PCI result is an estimate.")
                 f_severity = st.selectbox("Severity Level", SEVERITY_LIST, index=default_severity_index,
-                                          help="Low = minor, Medium = moderate, High = severe")
+                                          help="Low = minor, Medium = moderate, High = severe", key="f_severity")
                 f_area_str = st.text_input("Area Affected (%)", value=str(edit_data["Area (%)"]) if edit_data else "",
-                                           placeholder="e.g. 5 (required for PCI)")
+                                           placeholder="e.g. 5 (required for PCI)", key="f_area_str")
                 f_photo = st.file_uploader("📷 Defect Photo (optional)", type=["jpg", "jpeg", "png"],
-                                           help="Attach a site photo of the observed defect for this section")
+                                           help="Attach a site photo of the observed defect for this section",
+                                           key="f_photo")
 
             with col2:
                 st.markdown("**📏 IRI – Roughness Info**")
                 f_iri_str = st.text_input("IRI Value (m/km)", value=str(edit_data["IRI (m/km)"]) if edit_data else "",
-                                          placeholder="e.g. 2.0 (required for IRI)")
+                                          placeholder="e.g. 2.0 (required for IRI)", key="f_iri_str")
                 if f_photo is not None:
                     st.image(f_photo, caption="Photo preview", use_container_width=True)
                 elif edit_data and skey(edit_data["Road Name"], edit_data["Section"]) in st.session_state.section_photos:
@@ -651,7 +663,7 @@ with tabs[1]:
                     missing.append("IRI Value (m/km) must be a number")
 
             if missing:
-                st.warning("⚠️ Please fix the following before saving — PCI and IRI info are both required:\n" +
+                st.warning("⚠️ Please fix the following before saving — nothing you've typed has been lost:\n" +
                            "\n".join(f"- {m}" for m in missing))
             else:
                 actual_defect = f_custom_defect.strip() if f_defect == "Other (Custom)" else f_defect
@@ -696,7 +708,13 @@ with tabs[1]:
                     pci_cond, _ = classify_pci(pci_now)
                     iri_cond, _ = classify_iri(iri_val)
                     action = "updated" if edit_data else "added"
-                    st.success(f"✅ Section {section_val} {action}! PCI = **{pci_now:.1f}** ({pci_cond}) | IRI = **{iri_val:.2f}** ({iri_cond})")
+
+                    # Now that the save succeeded, it's safe to clear the form for the next entry.
+                    for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                              "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                        st.session_state.pop(_k, None)
+
+                    st.session_state["section_form_flash"] = f"✅ Section {section_val} {action}! PCI = {pci_now:.1f} ({pci_cond}) | IRI = {iri_val:.2f} ({iri_cond})"
                     st.rerun()
 
         # ── SECTIONS TABLE ──
@@ -753,6 +771,9 @@ with tabs[1]:
             with col_edit:
                 if st.button("✏️ Edit Selected Section", use_container_width=True):
                     st.session_state.edit_target = picked
+                    for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                              "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                        st.session_state.pop(_k, None)
                     st.rerun()
             with col_delete:
                 if st.button("🗑️ Delete Selected Section", use_container_width=True):
@@ -1086,15 +1107,30 @@ if mode == "Hybrid (PCI + IRI)":
                 })
             df_hybrid_full = pd.DataFrame(hybrid_rows)
 
-            # ── Section filter ──
-            st.markdown("### 🔎 Filter Sections")
+            # ── Section filter (checkbox list inside an expander) ──
             section_labels = {row["Key"]: f"S{row['Section']} — {row['Road Name']}" for row in hybrid_rows}
-            selected_keys = st.multiselect(
-                "Choose which section(s) to display on the dashboard",
-                options=list(section_labels.keys()),
-                default=list(section_labels.keys()),
-                format_func=lambda x: section_labels[x]
-            )
+
+            def _chk_key(k):
+                return f"dash_chk_{k[0]}_{k[1]}"
+
+            with st.expander(f"🔎 Filter Sections — click to choose which of the {len(section_labels)} section(s) to show", expanded=True):
+                bcol1, bcol2 = st.columns(2)
+                with bcol1:
+                    if st.button("☑️ Select All", use_container_width=True, key="dash_select_all"):
+                        for k in section_labels:
+                            st.session_state[_chk_key(k)] = True
+                        st.rerun()
+                with bcol2:
+                    if st.button("⬜ Select None", use_container_width=True, key="dash_select_none"):
+                        for k in section_labels:
+                            st.session_state[_chk_key(k)] = False
+                        st.rerun()
+
+                st.markdown("---")
+                for k in section_labels:
+                    st.checkbox(section_labels[k], value=st.session_state.get(_chk_key(k), True), key=_chk_key(k))
+
+            selected_keys = [k for k in section_labels if st.session_state.get(_chk_key(k), True)]
 
             if not selected_keys:
                 st.info("Select at least one section above to view the dashboard.")
