@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import openpyxl
+import io
 
 st.set_page_config(
     page_title="TCG633 – Pavement Condition Evaluation Tool",
@@ -115,6 +117,53 @@ def color_condition(val):
     }
     return colors.get(val, "")
 
+# ── PHOTO HELPERS ──
+def extract_section_photos(file_obj, sheet_name="PCI_Input", id_col_letter="A"):
+    """
+    Extract any images embedded/pasted into an Excel sheet and map each one
+    to the nearest Section ID above it in the given ID column.
+    Returns: {section_id: photo_bytes}
+    """
+    photos = {}
+    try:
+        file_obj.seek(0)
+        wb = openpyxl.load_workbook(file_obj)
+        if sheet_name not in wb.sheetnames:
+            return photos
+        ws = wb[sheet_name]
+
+        # Map worksheet row -> Section ID using the ID column
+        row_to_section = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.column_letter == id_col_letter and isinstance(cell.value, (int, float)):
+                    row_to_section[cell.row] = int(cell.value)
+
+        for img in getattr(ws, "_images", []):
+            anchor_row = img.anchor._from.row + 1  # openpyxl anchors are 0-indexed
+            candidates = [r for r in row_to_section if r <= anchor_row]
+            if not candidates:
+                continue
+            sec = row_to_section[max(candidates)]
+            try:
+                photos[sec] = img._data()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    finally:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+    return photos
+
+def show_section_photo(section_id, caption_prefix="Section", width=260):
+    """Display a stored photo for a section, if one exists."""
+    photo = st.session_state.section_photos.get(section_id)
+    if photo:
+        st.image(photo, caption=f"{caption_prefix} {section_id} – defect photo", width=width)
+
 # ── HEADER ──
 st.markdown("""
 <div style='background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
@@ -153,9 +202,15 @@ with st.sidebar:
     })
     st.dataframe(iri_bench, use_container_width=True, hide_index=True)
 
-# ── SESSION STATE FOR MANUAL ENTRIES ──
+# ── SESSION STATE ──
 if "manual_sections" not in st.session_state:
     st.session_state.manual_sections = []
+
+if "section_photos" not in st.session_state:
+    st.session_state.section_photos = {}  # {section_id: photo_bytes}
+
+if "edit_target" not in st.session_state:
+    st.session_state.edit_target = None  # Section ID currently being edited, or None
 
 # ── TABS ──
 if mode == "PCI Only":
@@ -163,7 +218,7 @@ if mode == "PCI Only":
 elif mode == "IRI Only":
     tab_labels = ["📖 How to Use", "📥 Data Input", "📈 IRI Analysis"]
 else:
-    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "🔀 Summary & Hybrid"]
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "📊 Dashboard"]
 
 tabs = st.tabs(tab_labels)
 
@@ -196,10 +251,14 @@ On the <b>left sidebar</b>, select one of three modes:<br><br>
 Go to the <b>📥 Data Input</b> tab. You have two options:<br><br>
 📂 <b>Upload Excel File</b> — upload a <code>.xlsx</code> file with sheets named <code>PCI_Input</code> and <code>IRI_Input</code>.<br>
 &nbsp;&nbsp;&nbsp;&nbsp;• <code>PCI_Input</code> needs columns: <b>Section ID, Defect Type, Severity, Area Affected (%)</b><br>
-&nbsp;&nbsp;&nbsp;&nbsp;• <code>IRI_Input</code> needs columns: <b>Section ID, IRI (m/km)</b><br><br>
-✏️ <b>Enter Data Manually</b> — fill in the form one section at a time and click <b>Add Section</b>.<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• Each section needs: Section ID, Defect Type, Severity Level, Area Affected (%), and IRI value<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• You can delete a section by entering its ID and clicking Delete, or clear all with Clear All
+&nbsp;&nbsp;&nbsp;&nbsp;• <code>IRI_Input</code> needs columns: <b>Section ID, IRI (m/km)</b><br>
+&nbsp;&nbsp;&nbsp;&nbsp;• 📷 If you paste/insert a defect photo into a row of <code>PCI_Input</code>, the app will pick it up and show it against that Section ID.<br><br>
+✏️ <b>Enter Data Manually</b> — fill in the form for one section at a time and click <b>Add Section</b>.<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• Every field is required: Road Name, Section Name/Chainage, Section ID, Defect Type, Severity, Area Affected (%), and IRI — PCI and IRI info must both be filled in before you can save<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• All values are typed directly into the fields (no stepper buttons)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• PCI is calculated immediately after you add or update a section<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• You can optionally attach a defect photo (jpg/png) per section<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• Pick any section from the list below the table to <b>Edit</b> or <b>Delete</b> it, or use <b>Clear All</b> to start over
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -212,7 +271,7 @@ Go to the <b>📥 Data Input</b> tab. You have two options:<br><br>
 Once data is entered, navigate to the analysis tabs:<br><br>
 📊 <b>PCI Analysis</b> — shows PCI scores per section, a condition distribution pie chart, and a full computation table<br>
 📈 <b>IRI Analysis</b> — shows the IRI roughness profile, condition zones, and results table<br>
-🔀 <b>Summary & Hybrid</b> — combines both into one overall condition rating per section with a maintenance priority plan
+📊 <b>Dashboard</b> — combines both into one overall condition rating per section, with a section filter and a maintenance priority plan
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -235,9 +294,10 @@ In <b>Hybrid mode</b>, the combined condition is always the <b>worse</b> of PCI 
     # STEP 5
     st.markdown("""
 <div style='background:#f2f3f4; border-left:5px solid #7f8c8d; padding:1rem 1.2rem; border-radius:8px; margin-bottom:1rem;'>
-<h4 style='margin:0 0 0.5rem 0; color:#515a5a;'>Step 5 — Export Your Results</h4>
+<h4 style='margin:0 0 0.5rem 0; color:#515a5a;'>Step 5 — Filter & Export</h4>
 <p style='margin:0; color:#1a252f;'>
-In the <b>🔀 Summary & Hybrid</b> tab, click <b>⬇️ Download Summary as CSV</b> to save your results for reporting or further analysis.
+In the <b>📊 Dashboard</b> tab, use the section filter to choose which section(s) you want to view — pick one, several, or all of them.
+Then click <b>⬇️ Download Summary as CSV</b> to save your (filtered) results for reporting or further analysis.
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -261,12 +321,13 @@ In the <b>🔀 Summary & Hybrid</b> tab, click <b>⬇️ Download Summary as CSV
 - IRI < 2.0 is considered very smooth (like a new highway); IRI > 4.0 indicates a road needing urgent attention.
 """)
 
-    with st.expander("What does Hybrid mode do?"):
+    with st.expander("What does Hybrid / Dashboard mode do?"):
         st.markdown("""
-Hybrid mode combines PCI and IRI into a single **Combined Condition** rating.
+The Dashboard combines PCI and IRI into a single **Combined Condition** rating.
 - The app compares the condition class of PCI and IRI for each section.
 - It always picks the **worse** of the two — this is the conservative approach recommended by JKR.
 - Example: If PCI = Very Good but IRI = Fair, the Combined Condition = **Fair**.
+- You can filter the dashboard to focus on just the section(s) you're interested in.
 """)
 
     with st.expander("Can I enter my own defect types?"):
@@ -274,6 +335,15 @@ Hybrid mode combines PCI and IRI into a single **Combined Condition** rating.
 Yes! In the manual entry form, the **Defect Type** dropdown includes 22 standard ASTM D6433 defect types.
 If your defect is not listed, select **Other (Custom)** and type the name manually.
 A default weight of **1.0** will be applied — the PCI result will be an estimate.
+""")
+
+    with st.expander("How do defect photos work?"):
+        st.markdown("""
+There are two ways to attach a defect photo to a section:
+- **Excel upload**: paste or insert a picture directly onto a row of the `PCI_Input` sheet, near that section's data. The app finds the nearest Section ID above the picture and links it automatically.
+- **Manual entry**: use the photo uploader in the entry form to attach a jpg/png for that section.
+
+Photos then appear in the Data Input table, the PCI Analysis table, and the Dashboard's Maintenance Priority Plan.
 """)
 
     with st.expander("Why does my Excel file not load all sections?"):
@@ -309,7 +379,7 @@ with tabs[1]:
     # ══════════════════════════════════════════
     if input_method == "📂 Upload Excel File":
         st.markdown("### 📂 Upload Your Excel Dataset")
-        st.caption("Upload your TCG633 Excel file. The app will read the PCI_Input and IRI_Input sheets automatically.")
+        st.caption("Upload your TCG633 Excel file. The app will read the PCI_Input and IRI_Input sheets automatically, and pick up any defect photos pasted into PCI_Input.")
 
         uploaded_file = st.file_uploader(
             "Drop your Excel file here or click to browse",
@@ -322,6 +392,13 @@ with tabs[1]:
                 xl = pd.ExcelFile(uploaded_file)
                 available_sheets = xl.sheet_names
                 st.success(f"✅ File uploaded! Sheets found: {', '.join(available_sheets)}")
+
+                # ── Extract embedded defect photos from PCI_Input ──
+                photo_bytes = io.BytesIO(uploaded_file.getvalue())
+                extracted_photos = extract_section_photos(photo_bytes, sheet_name="PCI_Input")
+                if extracted_photos:
+                    st.session_state.section_photos.update(extracted_photos)
+                    st.success(f"📷 Found {len(extracted_photos)} defect photo(s) in PCI_Input, linked to sections: {', '.join(str(s) for s in sorted(extracted_photos))}")
 
                 col_pci, col_iri = st.columns(2)
 
@@ -358,6 +435,14 @@ with tabs[1]:
                                     continue
                             if skipped_pci:
                                 st.warning("\u26a0\ufe0f Some PCI rows were skipped:\n" + "\n".join(f"- {s}" for s in skipped_pci))
+
+                            # ── Photo gallery for this upload ──
+                            if extracted_photos:
+                                st.markdown("#### 📷 Defect Photos")
+                                gallery_cols = st.columns(min(4, len(extracted_photos)))
+                                for i, (sec, img) in enumerate(sorted(extracted_photos.items())):
+                                    with gallery_cols[i % len(gallery_cols)]:
+                                        st.image(img, caption=f"Section {sec}", use_container_width=True)
                         else:
                             st.warning("Could not find header row in PCI_Input sheet.")
                     else:
@@ -404,41 +489,74 @@ with tabs[1]:
     # OPTION B: MANUAL INPUT — FORM TEMPLATE
     # ══════════════════════════════════════════
     else:
-        st.markdown("### ✏️ Add a Section")
-        st.caption("Fill in one section at a time, then click **Add Section**. Your entries will appear in the table below.")
+        st.markdown("### ✏️ Add / Edit a Section")
+
+        edit_data = None
+        if st.session_state.edit_target is not None:
+            edit_data = next((s for s in st.session_state.manual_sections
+                               if s["Section"] == st.session_state.edit_target), None)
+
+        if edit_data:
+            st.info(f"✏️ Editing **Section {edit_data['Section']}**. Update the fields below and click **Update Section**.")
+            if st.button("✖️ Cancel Edit"):
+                st.session_state.edit_target = None
+                st.rerun()
+        else:
+            st.caption("Fill in every field, then click **Add Section**. Road/Section info, PCI info, and IRI info are all required before you can proceed.")
+
+        default_defect_index = 0
+        if edit_data:
+            default_defect_index = DEFECT_LIST.index("Other (Custom)") if edit_data.get("Is Custom") \
+                else (DEFECT_LIST.index(edit_data["Defect Type"]) if edit_data["Defect Type"] in DEFECT_LIST else 0)
+        default_severity_index = SEVERITY_LIST.index(edit_data["Severity"]) if edit_data else 0
 
         # ── ENTRY FORM ──
-        with st.form("section_form", clear_on_submit=True):
+        with st.form("section_form", clear_on_submit=not edit_data):
             st.markdown("#### 📋 Section Entry Form")
+
+            st.markdown("**🛣️ Location Info**")
+            loc1, loc2, loc3 = st.columns(3)
+            with loc1:
+                f_road_name = st.text_input("Road Name", value=edit_data["Road Name"] if edit_data else "",
+                                            placeholder="e.g. Jalan Datuk Mohd Musa")
+            with loc2:
+                f_section_name = st.text_input("Section Name / Chainage", value=edit_data["Section Name"] if edit_data else "",
+                                               placeholder="e.g. Km 0+000 – 0+500")
+            with loc3:
+                f_section_str = st.text_input("Section ID (number)", value=str(edit_data["Section"]) if edit_data else "",
+                                              placeholder="e.g. 1")
+
             col1, col2 = st.columns(2)
 
             with col1:
                 st.markdown("**🔍 PCI – Defect Info**")
-                f_section = st.number_input("Section ID", min_value=1, max_value=999, value=1, step=1,
-                                            help="Unique ID for each 100m road section")
-                f_defect = st.selectbox("Defect Type", DEFECT_LIST,
+                f_defect = st.selectbox("Defect Type", DEFECT_LIST, index=default_defect_index,
                                         help="Select the primary defect observed in this section. Choose 'Other (Custom)' if your defect is not listed.")
                 f_custom_defect = ""
                 if f_defect == "Other (Custom)":
                     f_custom_defect = st.text_input(
                         "Custom Defect Name",
+                        value=edit_data["Defect Type"] if edit_data and edit_data.get("Is Custom") else "",
                         placeholder="e.g. Depression, Delamination, Joint Failure…",
                         help="Type in the exact defect name. A default weight of 1.0 will be applied."
                     )
                     st.caption("ℹ️ Custom defects use a default weighting of **1.0**. The PCI result is an estimate.")
-                f_severity = st.selectbox("Severity Level", SEVERITY_LIST,
+                f_severity = st.selectbox("Severity Level", SEVERITY_LIST, index=default_severity_index,
                                           help="Low = minor, Medium = moderate, High = severe")
-                f_area = st.number_input("Area Affected (%)", min_value=0.0, max_value=100.0,
-                                         value=5.0, step=0.5,
-                                         help="Percentage of the section's surface area affected by the defect")
+                f_area_str = st.text_input("Area Affected (%)", value=str(edit_data["Area (%)"]) if edit_data else "",
+                                           placeholder="e.g. 5 (required for PCI)")
+                f_photo = st.file_uploader("📷 Defect Photo (optional)", type=["jpg", "jpeg", "png"],
+                                           help="Attach a site photo of the observed defect for this section")
 
             with col2:
                 st.markdown("**📏 IRI – Roughness Info**")
-                f_iri = st.number_input("IRI Value (m/km)", min_value=0.0, max_value=20.0,
-                                        value=2.0, step=0.05,
-                                        help="International Roughness Index measured for this section. Lower = smoother road.")
-                st.markdown(" ")
-                st.markdown(" ")
+                f_iri_str = st.text_input("IRI Value (m/km)", value=str(edit_data["IRI (m/km)"]) if edit_data else "",
+                                          placeholder="e.g. 2.0 (required for IRI)")
+                if f_photo is not None:
+                    st.image(f_photo, caption="Photo preview", use_container_width=True)
+                elif edit_data and edit_data["Section"] in st.session_state.section_photos:
+                    st.image(st.session_state.section_photos[edit_data["Section"]],
+                             caption="Current photo (upload a new one to replace)", use_container_width=True)
 
                 # Quick reference hint inside form
                 st.markdown("""
@@ -453,28 +571,96 @@ with tabs[1]:
 """, unsafe_allow_html=True)
 
             st.markdown("---")
-            submitted = st.form_submit_button("➕ Add Section", use_container_width=True, type="primary")
+            submit_label = "💾 Update Section" if edit_data else "➕ Add Section"
+            submitted = st.form_submit_button(submit_label, use_container_width=True, type="primary")
 
         if submitted:
-            # Resolve the actual defect name
-            actual_defect = f_custom_defect.strip() if f_defect == "Other (Custom)" and f_custom_defect.strip() else f_defect
+            # ── Validate that every field is filled in ──
+            missing = []
+            if not f_road_name.strip():
+                missing.append("Road Name")
+            if not f_section_name.strip():
+                missing.append("Section Name / Chainage")
+            if not f_section_str.strip():
+                missing.append("Section ID")
+
+            section_val = None
+            if f_section_str.strip():
+                try:
+                    section_val = int(float(f_section_str.strip()))
+                except ValueError:
+                    missing.append("Section ID (must be a number)")
+
             if f_defect == "Other (Custom)" and not f_custom_defect.strip():
-                st.warning("⚠️ Please enter a custom defect name before adding.")
+                missing.append("Custom Defect Name")
+
+            if not f_area_str.strip():
+                missing.append("Area Affected (%) — required for PCI")
+            area_val = None
+            if f_area_str.strip():
+                try:
+                    area_val = float(f_area_str.strip())
+                    if not (0 <= area_val <= 100):
+                        missing.append("Area Affected (%) must be between 0 and 100")
+                except ValueError:
+                    missing.append("Area Affected (%) must be a number")
+
+            if not f_iri_str.strip():
+                missing.append("IRI Value (m/km) — required for IRI")
+            iri_val = None
+            if f_iri_str.strip():
+                try:
+                    iri_val = float(f_iri_str.strip())
+                    if iri_val < 0:
+                        missing.append("IRI Value (m/km) must be 0 or higher")
+                except ValueError:
+                    missing.append("IRI Value (m/km) must be a number")
+
+            if missing:
+                st.warning("⚠️ Please fix the following before saving — PCI and IRI info are both required:\n" +
+                           "\n".join(f"- {m}" for m in missing))
             else:
-                # Check for duplicate section ID
-                existing_ids = [s["Section"] for s in st.session_state.manual_sections]
-                if f_section in existing_ids:
-                    st.warning(f"⚠️ Section {f_section} already exists. Please use a different Section ID or delete the existing entry first.")
+                actual_defect = f_custom_defect.strip() if f_defect == "Other (Custom)" else f_defect
+
+                # Duplicate ID check (ignore the section currently being edited)
+                existing_ids = [s["Section"] for s in st.session_state.manual_sections
+                                if not edit_data or s["Section"] != edit_data["Section"]]
+                if section_val in existing_ids:
+                    st.warning(f"⚠️ Section {section_val} already exists. Please use a different Section ID or edit the existing entry instead.")
                 else:
-                    st.session_state.manual_sections.append({
-                        "Section": int(f_section),
+                    new_entry = {
+                        "Section": section_val,
+                        "Road Name": f_road_name.strip(),
+                        "Section Name": f_section_name.strip(),
                         "Defect Type": actual_defect,
                         "Is Custom": f_defect == "Other (Custom)",
                         "Severity": f_severity,
-                        "Area (%)": f_area,
-                        "IRI (m/km)": f_iri,
-                    })
-                    st.success(f"✅ Section {f_section} added! Defect: **{actual_defect}**")
+                        "Area (%)": area_val,
+                        "IRI (m/km)": iri_val,
+                    }
+
+                    if edit_data:
+                        idx = next(i for i, s in enumerate(st.session_state.manual_sections)
+                                  if s["Section"] == edit_data["Section"])
+                        st.session_state.manual_sections[idx] = new_entry
+                        if edit_data["Section"] != section_val and edit_data["Section"] in st.session_state.section_photos:
+                            st.session_state.section_photos[section_val] = st.session_state.section_photos.pop(edit_data["Section"])
+                        st.session_state.edit_target = None
+                    else:
+                        st.session_state.manual_sections.append(new_entry)
+
+                    if f_photo is not None:
+                        st.session_state.section_photos[section_val] = f_photo.getvalue()
+
+                    # ── Calculate PCI immediately ──
+                    w = DEFECT_WEIGHTS.get(actual_defect, DEFAULT_CUSTOM_WEIGHT)
+                    sf = SEVERITY_FACTORS.get(f_severity, 1.0)
+                    pci_now = max(0, 100 - area_val * w * sf)
+                    pci_cond, _ = classify_pci(pci_now)
+                    iri_cond, _ = classify_iri(iri_val)
+                    action = "updated" if edit_data else "added"
+                    st.success(f"✅ Section {section_val} {action}! PCI = **{pci_now:.1f}** ({pci_cond}) | IRI = **{iri_val:.2f}** ({iri_cond})")
+                    st.rerun()
 
         # ── SECTIONS TABLE ──
         st.markdown("---")
@@ -485,58 +671,81 @@ with tabs[1]:
         else:
             df_manual = pd.DataFrame(st.session_state.manual_sections).sort_values("Section").reset_index(drop=True)
 
-            # Compute quick preview columns
             def quick_pci(row):
                 w = DEFECT_WEIGHTS.get(row["Defect Type"], DEFAULT_CUSTOM_WEIGHT)
                 sf = SEVERITY_FACTORS.get(row["Severity"], 1.0)
                 return round(max(0, 100 - row["Area (%)"] * w * sf), 1)
 
-            df_manual["PCI (preview)"] = df_manual.apply(quick_pci, axis=1)
-            df_manual["PCI Rating"] = df_manual["PCI (preview)"].apply(lambda x: classify_pci(x)[0])
+            df_manual["PCI"] = df_manual.apply(quick_pci, axis=1)
+            df_manual["PCI Rating"] = df_manual["PCI"].apply(lambda x: classify_pci(x)[0])
             df_manual["IRI Rating"] = df_manual["IRI (m/km)"].apply(lambda x: classify_iri(x)[0])
+            df_manual["Photo"] = df_manual["Section"].apply(lambda s: "📷 Yes" if s in st.session_state.section_photos else "—")
 
-            display_cols = ["Section", "Defect Type", "Severity", "Area (%)", "IRI (m/km)",
-                            "PCI (preview)", "PCI Rating", "IRI Rating"]
+            display_cols = ["Section", "Road Name", "Section Name", "Defect Type", "Severity", "Area (%)",
+                            "IRI (m/km)", "PCI", "PCI Rating", "IRI Rating", "Photo"]
 
             styled_manual = df_manual[display_cols].style.map(
                 color_condition, subset=["PCI Rating", "IRI Rating"]
             )
             st.dataframe(styled_manual, use_container_width=True, hide_index=True)
 
-            st.caption(f"**{len(df_manual)} section(s) entered.** PCI (preview) is a quick estimate — full analysis is in the Analysis tabs.")
+            st.caption(f"**{len(df_manual)} section(s) entered.** PCI is calculated automatically as soon as a section is added or updated.")
 
-            # Delete a section
-            col_del1, col_del2 = st.columns([2, 1])
-            with col_del1:
-                del_id = st.number_input("Delete Section ID", min_value=1, max_value=999,
-                                         step=1, label_visibility="collapsed",
-                                         placeholder="Enter Section ID to delete...")
-            with col_del2:
-                if st.button("🗑️ Delete Section", use_container_width=True):
-                    before = len(st.session_state.manual_sections)
+            sections_with_photo = [s for s in df_manual["Section"] if s in st.session_state.section_photos]
+            if sections_with_photo:
+                with st.expander(f"📷 View Defect Photos ({len(sections_with_photo)})"):
+                    gallery_cols = st.columns(min(4, len(sections_with_photo)))
+                    for i, sec in enumerate(sections_with_photo):
+                        with gallery_cols[i % len(gallery_cols)]:
+                            st.image(st.session_state.section_photos[sec], caption=f"Section {sec}", use_container_width=True)
+
+            # ── Edit / Delete by picking from a list ──
+            st.markdown("#### ✏️ Edit or 🗑️ Delete a Section")
+            section_options = {
+                s["Section"]: f"S{s['Section']} — {s['Road Name'] or '-'} ({s['Section Name'] or '-'})"
+                for s in st.session_state.manual_sections
+            }
+            picked = st.selectbox(
+                "Choose a section",
+                options=list(section_options.keys()),
+                format_func=lambda x: section_options[x]
+            )
+            col_edit, col_delete = st.columns(2)
+            with col_edit:
+                if st.button("✏️ Edit Selected Section", use_container_width=True):
+                    st.session_state.edit_target = picked
+                    st.rerun()
+            with col_delete:
+                if st.button("🗑️ Delete Selected Section", use_container_width=True):
                     st.session_state.manual_sections = [
-                        s for s in st.session_state.manual_sections if s["Section"] != del_id
+                        s for s in st.session_state.manual_sections if s["Section"] != picked
                     ]
-                    if len(st.session_state.manual_sections) < before:
-                        st.success(f"Deleted Section {del_id}.")
-                        st.rerun()
-                    else:
-                        st.warning(f"Section {del_id} not found.")
+                    st.session_state.section_photos.pop(picked, None)
+                    if st.session_state.edit_target == picked:
+                        st.session_state.edit_target = None
+                    st.success(f"Deleted Section {picked}.")
+                    st.rerun()
 
             if st.button("🗑️ Clear All Sections", type="secondary"):
                 st.session_state.manual_sections = []
+                st.session_state.section_photos = {}
+                st.session_state.edit_target = None
                 st.rerun()
 
         # Build pci_data / iri_data from session state for analysis tabs
         for s in st.session_state.manual_sections:
             pci_data.append({
                 "Section": s["Section"],
+                "Road Name": s.get("Road Name", "-"),
+                "Section Name": s.get("Section Name", "-"),
                 "Defect Type": s["Defect Type"],
                 "Severity": s["Severity"],
                 "Area (%)": s["Area (%)"],
             })
             iri_data.append({
                 "Section": s["Section"],
+                "Road Name": s.get("Road Name", "-"),
+                "Section Name": s.get("Section Name", "-"),
                 "IRI (m/km)": s["IRI (m/km)"],
             })
 
@@ -552,7 +761,8 @@ for row in pci_data:
     pci = max(0, 100 - deduct)
     condition, color = classify_pci(pci)
     pci_results.append({
-        "Section": row["Section"], "Defect Type": row["Defect Type"],
+        "Section": row["Section"], "Road Name": row.get("Road Name", "-"), "Section Name": row.get("Section Name", "-"),
+        "Defect Type": row["Defect Type"],
         "Severity": row["Severity"], "Area (%)": row["Area (%)"],
         "Weighting": w, "Severity Factor": sf, "Deduct Value": round(deduct, 2),
         "PCI": round(pci, 2), "Condition": condition, "Color": color,
@@ -563,7 +773,8 @@ iri_results = []
 for row in iri_data:
     condition, color = classify_iri(row["IRI (m/km)"])
     iri_results.append({
-        "Section": row["Section"], "IRI (m/km)": row["IRI (m/km)"],
+        "Section": row["Section"], "Road Name": row.get("Road Name", "-"), "Section Name": row.get("Section Name", "-"),
+        "IRI (m/km)": row["IRI (m/km)"],
         "Condition": condition, "Color": color,
         "Recommendation": iri_recommendation(row["IRI (m/km)"])
     })
@@ -668,7 +879,6 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
 
             st.markdown("---")
 
-            # Benchmark table
             benchmark_table_pci()
 
             st.markdown("---")
@@ -681,7 +891,6 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
                         marker_color=row["Color"], showlegend=False,
                         text=[f"{row['PCI']:.1f}"], textposition="outside"))
 
-                # Benchmark bands as horizontal spans
                 fig_bar.add_hrect(y0=85, y1=110, fillcolor="#2ecc71", opacity=0.07, line_width=0)
                 fig_bar.add_hrect(y0=70, y1=85, fillcolor="#27ae60", opacity=0.07, line_width=0)
                 fig_bar.add_hrect(y0=55, y1=70, fillcolor="#f39c12", opacity=0.08, line_width=0)
@@ -710,10 +919,26 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             st.markdown("### 📋 PCI Computation Table")
-            display_pci = df_pci[["Section", "Defect Type", "Severity", "Area (%)", "Weighting",
+            display_pci = df_pci[["Section", "Road Name", "Section Name", "Defect Type", "Severity", "Area (%)", "Weighting",
                                    "Severity Factor", "Deduct Value", "PCI", "Condition", "Recommendation"]].copy()
             styled = display_pci.style.map(color_condition, subset=["Condition"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            sections_with_photos = [int(s) for s in df_pci["Section"] if int(s) in st.session_state.section_photos]
+            if sections_with_photos:
+                st.markdown("### 📷 Defect Photos by Section")
+                for sec in sections_with_photos:
+                    row = df_pci[df_pci["Section"] == sec].iloc[0]
+                    with st.expander(f"Section {sec} — {row['Condition']} (PCI {row['PCI']:.1f})"):
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            show_section_photo(sec)
+                        with c2:
+                            st.write(f"**Road:** {row['Road Name']} ({row['Section Name']})")
+                            st.write(f"**Defect:** {row['Defect Type']}")
+                            st.write(f"**Severity:** {row['Severity']}")
+                            st.write(f"**Area Affected:** {row['Area (%)']}%")
+                            st.write(f"**Recommendation:** {row['Recommendation']}")
 
 
 # ══════════════════════════════════════════════
@@ -744,7 +969,6 @@ if iri_tab:
 
             st.markdown("---")
 
-            # Benchmark table
             benchmark_table_iri()
 
             st.markdown("---")
@@ -753,7 +977,6 @@ if iri_tab:
                 st.markdown("### IRI Profile Along Road")
                 fig_line = go.Figure()
 
-                # Benchmark zones
                 fig_line.add_hrect(y0=0, y1=2, fillcolor="#2ecc71", opacity=0.10, line_width=0,
                                    annotation_text="Very Good", annotation_position="left")
                 fig_line.add_hrect(y0=2, y1=3, fillcolor="#f1c40f", opacity=0.10, line_width=0,
@@ -764,7 +987,6 @@ if iri_tab:
                                    fillcolor="#e74c3c", opacity=0.10, line_width=0,
                                    annotation_text="Poor", annotation_position="left")
 
-                # Threshold lines
                 fig_line.add_hline(y=2, line_dash="dash", line_color="#2ecc71",
                                    annotation_text="Good threshold (2.0)")
                 fig_line.add_hline(y=3, line_dash="dash", line_color="#f39c12",
@@ -795,21 +1017,20 @@ if iri_tab:
                 st.plotly_chart(fig_pie2, use_container_width=True)
 
             st.markdown("### 📋 IRI Results Table")
-            display_iri = df_iri[["Section", "IRI (m/km)", "Condition", "Recommendation"]].copy()
+            display_iri = df_iri[["Section", "Road Name", "Section Name", "IRI (m/km)", "Condition", "Recommendation"]].copy()
             styled_iri = display_iri.style.map(color_condition, subset=["Condition"])
             st.dataframe(styled_iri, use_container_width=True, hide_index=True)
 
 
 # ══════════════════════════════════════════════
-# HYBRID TAB
+# DASHBOARD TAB (was "Summary & Hybrid")
 # ══════════════════════════════════════════════
 if mode == "Hybrid (PCI + IRI)":
     with tabs[4]:
-        st.markdown("## 🔀 Summary & Hybrid Index")
+        st.markdown("## 📊 Dashboard")
         if df_pci.empty or df_iri.empty:
-            st.warning("⚠️ Both PCI and IRI data are required for Hybrid analysis.")
+            st.warning("⚠️ Both PCI and IRI data are required for the Dashboard.")
         else:
-            # Match by section ID
             pci_map = {r["Section"]: r for r in pci_results}
             iri_map = {r["Section"]: r for r in iri_results}
             common_sections = sorted(set(pci_map.keys()) & set(iri_map.keys()))
@@ -820,63 +1041,88 @@ if mode == "Hybrid (PCI + IRI)":
                 r = iri_map[sec]
                 combined = hybrid_condition(p["Condition"], r["Condition"])
                 hybrid_rows.append({
-                    "Section": sec, "PCI": p["PCI"], "PCI Class": p["Condition"],
+                    "Section": sec, "Road Name": p.get("Road Name", "-"), "Section Name": p.get("Section Name", "-"),
+                    "PCI": p["PCI"], "PCI Class": p["Condition"],
                     "IRI (m/km)": r["IRI (m/km)"], "IRI Class": r["Condition"],
                     "Combined Condition": combined, "Maintenance Recommendation": hybrid_recommendation(combined)
                 })
-            df_hybrid = pd.DataFrame(hybrid_rows)
+            df_hybrid_full = pd.DataFrame(hybrid_rows)
 
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Network Avg PCI", f"{df_hybrid['PCI'].mean():.1f}")
-            k2.metric("Network Avg IRI", f"{df_hybrid['IRI (m/km)'].mean():.2f} m/km")
-            critical = len(df_hybrid[df_hybrid["Combined Condition"].isin(["Poor", "Poor (Rough)"])])
-            k3.metric("Critical Sections", f"{critical}/{len(df_hybrid)}")
+            # ── Section filter ──
+            st.markdown("### 🔎 Filter Sections")
+            section_labels = {
+                row["Section"]: f"S{row['Section']} — {row['Road Name']} ({row['Section Name']})"
+                for row in hybrid_rows
+            }
+            selected_sections = st.multiselect(
+                "Choose which section(s) to display on the dashboard",
+                options=list(section_labels.keys()),
+                default=list(section_labels.keys()),
+                format_func=lambda x: section_labels[x]
+            )
 
-            st.markdown("---")
-            st.markdown("### PCI vs IRI Comparison")
-            fig_compare = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_compare.add_trace(go.Bar(
-                x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
-                y=df_hybrid["PCI"], name="PCI", marker_color="#3498db", opacity=0.8), secondary_y=False)
-            fig_compare.add_trace(go.Scatter(
-                x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
-                y=df_hybrid["IRI (m/km)"], name="IRI (m/km)",
-                mode="lines+markers", marker=dict(color="#e74c3c", size=10),
-                line=dict(color="#e74c3c", width=2)), secondary_y=True)
+            if not selected_sections:
+                st.info("Select at least one section above to view the dashboard.")
+            else:
+                df_hybrid = df_hybrid_full[df_hybrid_full["Section"].isin(selected_sections)].reset_index(drop=True)
 
-            # PCI benchmark lines
-            fig_compare.add_hline(y=85, line_dash="dot", line_color="#2ecc71",
-                                  annotation_text="PCI 85 (Very Good)", secondary_y=False)
-            fig_compare.add_hline(y=55, line_dash="dot", line_color="#e74c3c",
-                                  annotation_text="PCI 55 (Fair)", secondary_y=False)
+                st.markdown("---")
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Avg PCI (selected)", f"{df_hybrid['PCI'].mean():.1f}")
+                k2.metric("Avg IRI (selected)", f"{df_hybrid['IRI (m/km)'].mean():.2f} m/km")
+                critical = len(df_hybrid[df_hybrid["Combined Condition"].isin(["Poor", "Poor (Rough)"])])
+                k3.metric("Critical Sections", f"{critical}/{len(df_hybrid)}")
 
-            fig_compare.update_yaxes(title_text="PCI Score", secondary_y=False)
-            fig_compare.update_yaxes(title_text="IRI (m/km)", secondary_y=True)
-            fig_compare.update_layout(height=420, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig_compare, use_container_width=True)
+                st.markdown("---")
+                st.markdown("### PCI vs IRI Comparison")
+                fig_compare = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_compare.add_trace(go.Bar(
+                    x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
+                    y=df_hybrid["PCI"], name="PCI", marker_color="#3498db", opacity=0.8), secondary_y=False)
+                fig_compare.add_trace(go.Scatter(
+                    x=[f"S{int(r['Section'])}" for _, r in df_hybrid.iterrows()],
+                    y=df_hybrid["IRI (m/km)"], name="IRI (m/km)",
+                    mode="lines+markers", marker=dict(color="#e74c3c", size=10),
+                    line=dict(color="#e74c3c", width=2)), secondary_y=True)
 
-            st.markdown("### 📋 Hybrid Summary Table")
-            styled_hybrid = df_hybrid.style.map(color_condition, subset=["PCI Class", "IRI Class", "Combined Condition"])
-            st.dataframe(styled_hybrid, use_container_width=True, hide_index=True)
+                fig_compare.add_hline(y=85, line_dash="dot", line_color="#2ecc71",
+                                      annotation_text="PCI 85 (Very Good)", secondary_y=False)
+                fig_compare.add_hline(y=55, line_dash="dot", line_color="#e74c3c",
+                                      annotation_text="PCI 55 (Fair)", secondary_y=False)
 
-            st.markdown("### 🔧 Maintenance Priority Plan")
-            priority_map = {"Poor": 1, "Poor (Rough)": 1, "Fair": 2, "Good / Satisfactory": 3,
-                            "Good": 3, "Very Good": 4, "Very Good (Smooth)": 4}
-            df_hybrid["Priority"] = df_hybrid["Combined Condition"].map(priority_map)
-            df_priority = df_hybrid.sort_values("Priority").reset_index(drop=True)
-            df_priority["Priority Level"] = df_priority["Priority"].map(
-                {1: "🔴 Immediate", 2: "🟡 Short-term", 3: "🟢 Scheduled", 4: "✅ Monitor only"})
-            for _, row in df_priority.iterrows():
-                with st.expander(f"{row['Priority Level']} — Section {int(row['Section'])} | {row['Combined Condition']}"):
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("PCI", f"{row['PCI']:.1f}")
-                    c2.metric("IRI", f"{row['IRI (m/km)']:.2f} m/km")
-                    c3.metric("Combined", row["Combined Condition"])
-                    st.info(f"**Recommended Action:** {row['Maintenance Recommendation']}")
+                fig_compare.update_yaxes(title_text="PCI Score", secondary_y=False)
+                fig_compare.update_yaxes(title_text="IRI (m/km)", secondary_y=True)
+                fig_compare.update_layout(height=420, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_compare, use_container_width=True)
 
-            csv = df_hybrid.drop(columns=["Priority"]).to_csv(index=False)
-            st.download_button("⬇️ Download Summary as CSV", data=csv,
-                               file_name="TCG633_Pavement_Results.csv", mime="text/csv")
+                st.markdown("### 📋 Hybrid Summary Table")
+                display_hybrid_cols = ["Section", "Road Name", "Section Name", "PCI", "PCI Class",
+                                       "IRI (m/km)", "IRI Class", "Combined Condition", "Maintenance Recommendation"]
+                styled_hybrid = df_hybrid[display_hybrid_cols].style.map(
+                    color_condition, subset=["PCI Class", "IRI Class", "Combined Condition"])
+                st.dataframe(styled_hybrid, use_container_width=True, hide_index=True)
+
+                st.markdown("### 🔧 Maintenance Priority Plan")
+                priority_map = {"Poor": 1, "Poor (Rough)": 1, "Fair": 2, "Good / Satisfactory": 3,
+                                "Good": 3, "Very Good": 4, "Very Good (Smooth)": 4}
+                df_hybrid["Priority"] = df_hybrid["Combined Condition"].map(priority_map)
+                df_priority = df_hybrid.sort_values("Priority").reset_index(drop=True)
+                df_priority["Priority Level"] = df_priority["Priority"].map(
+                    {1: "🔴 Immediate", 2: "🟡 Short-term", 3: "🟢 Scheduled", 4: "✅ Monitor only"})
+                for _, row in df_priority.iterrows():
+                    sec = int(row["Section"])
+                    with st.expander(f"{row['Priority Level']} — Section {sec} | {row['Road Name']} ({row['Section Name']}) | {row['Combined Condition']}"):
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("PCI", f"{row['PCI']:.1f}")
+                        c2.metric("IRI", f"{row['IRI (m/km)']:.2f} m/km")
+                        c3.metric("Combined", row["Combined Condition"])
+                        st.info(f"**Recommended Action:** {row['Maintenance Recommendation']}")
+                        if sec in st.session_state.section_photos:
+                            show_section_photo(sec, width=320)
+
+                csv = df_hybrid.drop(columns=["Priority"]).to_csv(index=False)
+                st.download_button("⬇️ Download Summary as CSV", data=csv,
+                                   file_name="TCG633_Pavement_Results.csv", mime="text/csv")
 
 st.markdown("---")
 st.markdown("""
