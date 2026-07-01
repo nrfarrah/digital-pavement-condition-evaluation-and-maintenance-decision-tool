@@ -613,6 +613,9 @@ with tabs[1]:
             st.info("No sections added yet. Fill in the form above and click **Add Section** to get started.")
         else:
             df_manual = pd.DataFrame(st.session_state.manual_sections).sort_values("Section").reset_index(drop=True)
+            if "Road Name" not in df_manual.columns:
+                df_manual["Road Name"] = "-"
+            df_manual["Road Name"] = df_manual["Road Name"].fillna("-")
 
             def quick_pci(row):
                 w = DEFECT_WEIGHTS.get(row["Defect Type"], DEFAULT_CUSTOM_WEIGHT)
@@ -646,7 +649,7 @@ with tabs[1]:
             st.markdown("---")
             st.markdown("#### ✏️ Edit or Delete a Section")
             section_options = [s["Section"] for s in st.session_state.manual_sections]
-            label_map = {s["Section"]: f"Section {s['Section']} – {s['Road Name']} ({s['Defect Type']})"
+            label_map = {s["Section"]: f"Section {s['Section']} – {s.get('Road Name', '-')} ({s['Defect Type']})"
                          for s in st.session_state.manual_sections}
             selected_section = st.selectbox("Select a section to edit or delete", options=section_options,
                                             format_func=lambda s: label_map[s], key="edit_select")
@@ -656,7 +659,7 @@ with tabs[1]:
                 st.caption(f"Editing Section {target['Section']}")
                 e_col1, e_col2 = st.columns(2)
                 with e_col1:
-                    e_road_name = st.text_input("Road Name", value=target["Road Name"])
+                    e_road_name = st.text_input("Road Name", value=target.get("Road Name", "-"))
                     e_section_raw = st.text_input("Section ID *", value=str(target["Section"]))
                     default_idx = DEFECT_LIST.index(target["Defect Type"]) if target["Defect Type"] in DEFECT_LIST else DEFECT_LIST.index("Other (Custom)")
                     e_defect = st.selectbox("Defect Type", DEFECT_LIST, index=default_idx, key="edit_defect")
