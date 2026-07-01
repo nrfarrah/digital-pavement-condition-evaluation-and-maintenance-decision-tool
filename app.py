@@ -117,12 +117,18 @@ def color_condition(val):
     }
     return colors.get(val, "")
 
-# ── PHOTO HELPERS ──
+# ── PHOTO / KEY HELPERS ──
+def skey(road_name, section):
+    """Composite identity key: (Road Name, Section ID). Lets the same Section ID
+    number be reused across different road names."""
+    return (str(road_name).strip() if road_name is not None else "-", int(section))
+
 def extract_section_photos(file_obj, sheet_name="PCI_Input", id_col_letter="A"):
     """
     Extract any images embedded/pasted into an Excel sheet and map each one
     to the nearest Section ID above it in the given ID column.
-    Returns: {section_id: photo_bytes}
+    Excel-uploaded data has no Road Name column, so photos are keyed under "-".
+    Returns: {(road_name, section_id): photo_bytes}
     """
     photos = {}
     try:
@@ -146,7 +152,7 @@ def extract_section_photos(file_obj, sheet_name="PCI_Input", id_col_letter="A"):
                 continue
             sec = row_to_section[max(candidates)]
             try:
-                photos[sec] = img._data()
+                photos[skey("-", sec)] = img._data()
             except Exception:
                 continue
     except Exception:
@@ -158,11 +164,12 @@ def extract_section_photos(file_obj, sheet_name="PCI_Input", id_col_letter="A"):
             pass
     return photos
 
-def show_section_photo(section_id, caption_prefix="Section", width=260):
-    """Display a stored photo for a section, if one exists."""
-    photo = st.session_state.section_photos.get(section_id)
+def show_section_photo(key, caption=None, width=260):
+    """Display a stored photo for a (road_name, section) key, if one exists."""
+    photo = st.session_state.section_photos.get(key)
     if photo:
-        st.image(photo, caption=f"{caption_prefix} {section_id} – defect photo", width=width)
+        label = caption or f"Section {key[1]} — {key[0]} – defect photo"
+        st.image(photo, caption=label, width=width)
 
 # ── HEADER ──
 st.markdown("""
@@ -207,10 +214,10 @@ if "manual_sections" not in st.session_state:
     st.session_state.manual_sections = []
 
 if "section_photos" not in st.session_state:
-    st.session_state.section_photos = {}  # {section_id: photo_bytes}
+    st.session_state.section_photos = {}  # {(road_name, section_id): photo_bytes}
 
 if "edit_target" not in st.session_state:
-    st.session_state.edit_target = None  # Section ID currently being edited, or None
+    st.session_state.edit_target = None  # (road_name, section_id) currently being edited, or None
 
 # ── TABS ──
 if mode == "PCI Only":
@@ -254,7 +261,8 @@ Go to the <b>📥 Data Input</b> tab. You have two options:<br><br>
 &nbsp;&nbsp;&nbsp;&nbsp;• <code>IRI_Input</code> needs columns: <b>Section ID, IRI (m/km)</b><br>
 &nbsp;&nbsp;&nbsp;&nbsp;• 📷 If you paste/insert a defect photo into a row of <code>PCI_Input</code>, the app will pick it up and show it against that Section ID.<br><br>
 ✏️ <b>Enter Data Manually</b> — fill in the form for one section at a time and click <b>Add Section</b>.<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• Every field is required: Road Name, Section Name/Chainage, Section ID, Defect Type, Severity, Area Affected (%), and IRI — PCI and IRI info must both be filled in before you can save<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• Every field is required: Road Name, Section ID, Defect Type, Severity, Area Affected (%), and IRI — PCI and IRI info must both be filled in before you can save<br>
+&nbsp;&nbsp;&nbsp;&nbsp;• The same Section ID number can be reused across different Road Names<br>
 &nbsp;&nbsp;&nbsp;&nbsp;• All values are typed directly into the fields (no stepper buttons)<br>
 &nbsp;&nbsp;&nbsp;&nbsp;• PCI is calculated immediately after you add or update a section<br>
 &nbsp;&nbsp;&nbsp;&nbsp;• You can optionally attach a defect photo (jpg/png) per section<br>
@@ -381,14 +389,42 @@ with tabs[1]:
         st.markdown("### 📂 Upload Your Excel Dataset")
         st.caption("Upload your TCG633 Excel file. The app will read the PCI_Input and IRI_Input sheets automatically, and pick up any defect photos pasted into PCI_Input.")
 
-        uploaded_file = st.file_uploader(
-            "Drop your Excel file here or click to browse",
-            type=["xlsx", "xls"],
-            help="Must contain sheets named 'PCI_Input' and 'IRI_Input'"
-        )
+        if "excel_uploader_key" not in st.session_state:
+            st.session_state.excel_uploader_key = 0
+        if "last_excel_signature" not in st.session_state:
+            st.session_state.last_excel_signature = None
+
+        col_up, col_reset = st.columns([4, 1])
+        with col_up:
+            uploaded_file = st.file_uploader(
+                "Drop your Excel file here or click to browse",
+                type=["xlsx", "xls"],
+                help="Must contain sheets named 'PCI_Input' and 'IRI_Input'",
+                key=f"excel_file_{st.session_state.excel_uploader_key}"
+            )
+        with col_reset:
+            st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+            if st.button("🔄 Reset Upload", use_container_width=True,
+                        help="Click this before re-uploading an edited file, especially if it has the SAME filename as before — browsers sometimes won't register a re-upload otherwise."):
+                st.session_state.excel_uploader_key += 1
+                st.session_state.last_excel_signature = None
+                # Clear photos that came from a previous Excel upload (keyed under Road Name "-")
+                st.session_state.section_photos = {k: v for k, v in st.session_state.section_photos.items() if k[0] != "-"}
+                st.rerun()
 
         if uploaded_file is not None:
             try:
+                # Detect whether this is genuinely new file content vs. the same file re-rendering
+                file_signature = (uploaded_file.name, uploaded_file.size, hash(uploaded_file.getvalue()))
+                is_new_file = file_signature != st.session_state.last_excel_signature
+                if is_new_file:
+                    st.session_state.last_excel_signature = file_signature
+                    # Wipe out any photos from a PREVIOUS Excel upload so stale ones don't linger
+                    st.session_state.section_photos = {k: v for k, v in st.session_state.section_photos.items() if k[0] != "-"}
+
+                st.caption(f"📄 Currently loaded: **{uploaded_file.name}** ({uploaded_file.size:,} bytes). "
+                          f"If you edited this file and it still shows old values below, click **🔄 Reset Upload** above and upload it again.")
+
                 xl = pd.ExcelFile(uploaded_file)
                 available_sheets = xl.sheet_names
                 st.success(f"✅ File uploaded! Sheets found: {', '.join(available_sheets)}")
@@ -398,7 +434,7 @@ with tabs[1]:
                 extracted_photos = extract_section_photos(photo_bytes, sheet_name="PCI_Input")
                 if extracted_photos:
                     st.session_state.section_photos.update(extracted_photos)
-                    st.success(f"📷 Found {len(extracted_photos)} defect photo(s) in PCI_Input, linked to sections: {', '.join(str(s) for s in sorted(extracted_photos))}")
+                    st.success(f"📷 Found {len(extracted_photos)} defect photo(s) in PCI_Input, linked to sections: {', '.join(str(k[1]) for k in sorted(extracted_photos))}")
 
                 col_pci, col_iri = st.columns(2)
 
@@ -440,9 +476,9 @@ with tabs[1]:
                             if extracted_photos:
                                 st.markdown("#### 📷 Defect Photos")
                                 gallery_cols = st.columns(min(4, len(extracted_photos)))
-                                for i, (sec, img) in enumerate(sorted(extracted_photos.items())):
+                                for i, (key, img) in enumerate(sorted(extracted_photos.items())):
                                     with gallery_cols[i % len(gallery_cols)]:
-                                        st.image(img, caption=f"Section {sec}", use_container_width=True)
+                                        st.image(img, caption=f"Section {key[1]}", use_container_width=True)
                         else:
                             st.warning("Could not find header row in PCI_Input sheet.")
                     else:
@@ -493,16 +529,18 @@ with tabs[1]:
 
         edit_data = None
         if st.session_state.edit_target is not None:
+            target_road, target_sec = st.session_state.edit_target
             edit_data = next((s for s in st.session_state.manual_sections
-                               if s["Section"] == st.session_state.edit_target), None)
+                               if s["Road Name"] == target_road and s["Section"] == target_sec), None)
 
         if edit_data:
-            st.info(f"✏️ Editing **Section {edit_data['Section']}**. Update the fields below and click **Update Section**.")
+            st.info(f"✏️ Editing **Section {edit_data['Section']} — {edit_data['Road Name']}**. Update the fields below and click **Update Section**.")
             if st.button("✖️ Cancel Edit"):
                 st.session_state.edit_target = None
                 st.rerun()
         else:
-            st.caption("Fill in every field, then click **Add Section**. Road/Section info, PCI info, and IRI info are all required before you can proceed.")
+            st.caption("Fill in every field, then click **Add Section**. Road Name, Section ID, PCI info, and IRI info are all required before you can proceed. "
+                       "The same Section ID can be reused as long as the Road Name is different.")
 
         default_defect_index = 0
         if edit_data:
@@ -515,16 +553,14 @@ with tabs[1]:
             st.markdown("#### 📋 Section Entry Form")
 
             st.markdown("**🛣️ Location Info**")
-            loc1, loc2, loc3 = st.columns(3)
+            loc1, loc2 = st.columns(2)
             with loc1:
                 f_road_name = st.text_input("Road Name", value=edit_data["Road Name"] if edit_data else "",
                                             placeholder="e.g. Jalan Datuk Mohd Musa")
             with loc2:
-                f_section_name = st.text_input("Section Name / Chainage", value=edit_data["Section Name"] if edit_data else "",
-                                               placeholder="e.g. Km 0+000 – 0+500")
-            with loc3:
                 f_section_str = st.text_input("Section ID (number)", value=str(edit_data["Section"]) if edit_data else "",
                                               placeholder="e.g. 1")
+                st.caption("ℹ️ The same Section ID can be reused for a different Road Name.")
 
             col1, col2 = st.columns(2)
 
@@ -554,8 +590,8 @@ with tabs[1]:
                                           placeholder="e.g. 2.0 (required for IRI)")
                 if f_photo is not None:
                     st.image(f_photo, caption="Photo preview", use_container_width=True)
-                elif edit_data and edit_data["Section"] in st.session_state.section_photos:
-                    st.image(st.session_state.section_photos[edit_data["Section"]],
+                elif edit_data and skey(edit_data["Road Name"], edit_data["Section"]) in st.session_state.section_photos:
+                    st.image(st.session_state.section_photos[skey(edit_data["Road Name"], edit_data["Section"])],
                              caption="Current photo (upload a new one to replace)", use_container_width=True)
 
                 # Quick reference hint inside form
@@ -579,8 +615,6 @@ with tabs[1]:
             missing = []
             if not f_road_name.strip():
                 missing.append("Road Name")
-            if not f_section_name.strip():
-                missing.append("Section Name / Chainage")
             if not f_section_str.strip():
                 missing.append("Section ID")
 
@@ -621,17 +655,19 @@ with tabs[1]:
                            "\n".join(f"- {m}" for m in missing))
             else:
                 actual_defect = f_custom_defect.strip() if f_defect == "Other (Custom)" else f_defect
+                new_road = f_road_name.strip()
+                new_key = skey(new_road, section_val)
 
-                # Duplicate ID check (ignore the section currently being edited)
-                existing_ids = [s["Section"] for s in st.session_state.manual_sections
-                                if not edit_data or s["Section"] != edit_data["Section"]]
-                if section_val in existing_ids:
-                    st.warning(f"⚠️ Section {section_val} already exists. Please use a different Section ID or edit the existing entry instead.")
+                # Duplicate check: same Road Name + Section ID combo (ignore the entry being edited).
+                # A Section ID CAN be reused as long as the Road Name is different.
+                existing_keys = [skey(s["Road Name"], s["Section"]) for s in st.session_state.manual_sections
+                                 if not edit_data or skey(s["Road Name"], s["Section"]) != skey(edit_data["Road Name"], edit_data["Section"])]
+                if new_key in existing_keys:
+                    st.warning(f"⚠️ Section {section_val} on **{new_road}** already exists. Please use a different Section ID, a different Road Name, or edit the existing entry instead.")
                 else:
                     new_entry = {
                         "Section": section_val,
-                        "Road Name": f_road_name.strip(),
-                        "Section Name": f_section_name.strip(),
+                        "Road Name": new_road,
                         "Defect Type": actual_defect,
                         "Is Custom": f_defect == "Other (Custom)",
                         "Severity": f_severity,
@@ -640,17 +676,18 @@ with tabs[1]:
                     }
 
                     if edit_data:
+                        old_key = skey(edit_data["Road Name"], edit_data["Section"])
                         idx = next(i for i, s in enumerate(st.session_state.manual_sections)
-                                  if s["Section"] == edit_data["Section"])
+                                  if skey(s["Road Name"], s["Section"]) == old_key)
                         st.session_state.manual_sections[idx] = new_entry
-                        if edit_data["Section"] != section_val and edit_data["Section"] in st.session_state.section_photos:
-                            st.session_state.section_photos[section_val] = st.session_state.section_photos.pop(edit_data["Section"])
+                        if old_key != new_key and old_key in st.session_state.section_photos:
+                            st.session_state.section_photos[new_key] = st.session_state.section_photos.pop(old_key)
                         st.session_state.edit_target = None
                     else:
                         st.session_state.manual_sections.append(new_entry)
 
                     if f_photo is not None:
-                        st.session_state.section_photos[section_val] = f_photo.getvalue()
+                        st.session_state.section_photos[new_key] = f_photo.getvalue()
 
                     # ── Calculate PCI immediately ──
                     w = DEFECT_WEIGHTS.get(actual_defect, DEFAULT_CUSTOM_WEIGHT)
@@ -679,9 +716,10 @@ with tabs[1]:
             df_manual["PCI"] = df_manual.apply(quick_pci, axis=1)
             df_manual["PCI Rating"] = df_manual["PCI"].apply(lambda x: classify_pci(x)[0])
             df_manual["IRI Rating"] = df_manual["IRI (m/km)"].apply(lambda x: classify_iri(x)[0])
-            df_manual["Photo"] = df_manual["Section"].apply(lambda s: "📷 Yes" if s in st.session_state.section_photos else "—")
+            df_manual["Photo"] = df_manual.apply(
+                lambda row: "📷 Yes" if skey(row["Road Name"], row["Section"]) in st.session_state.section_photos else "—", axis=1)
 
-            display_cols = ["Section", "Road Name", "Section Name", "Defect Type", "Severity", "Area (%)",
+            display_cols = ["Section", "Road Name", "Defect Type", "Severity", "Area (%)",
                             "IRI (m/km)", "PCI", "PCI Rating", "IRI Rating", "Photo"]
 
             styled_manual = df_manual[display_cols].style.map(
@@ -691,18 +729,19 @@ with tabs[1]:
 
             st.caption(f"**{len(df_manual)} section(s) entered.** PCI is calculated automatically as soon as a section is added or updated.")
 
-            sections_with_photo = [s for s in df_manual["Section"] if s in st.session_state.section_photos]
+            sections_with_photo = [skey(s["Road Name"], s["Section"]) for s in st.session_state.manual_sections
+                                   if skey(s["Road Name"], s["Section"]) in st.session_state.section_photos]
             if sections_with_photo:
                 with st.expander(f"📷 View Defect Photos ({len(sections_with_photo)})"):
                     gallery_cols = st.columns(min(4, len(sections_with_photo)))
-                    for i, sec in enumerate(sections_with_photo):
+                    for i, key in enumerate(sections_with_photo):
                         with gallery_cols[i % len(gallery_cols)]:
-                            st.image(st.session_state.section_photos[sec], caption=f"Section {sec}", use_container_width=True)
+                            st.image(st.session_state.section_photos[key], caption=f"Section {key[1]} — {key[0]}", use_container_width=True)
 
             # ── Edit / Delete by picking from a list ──
             st.markdown("#### ✏️ Edit or 🗑️ Delete a Section")
             section_options = {
-                s["Section"]: f"S{s['Section']} — {s['Road Name'] or '-'} ({s['Section Name'] or '-'})"
+                skey(s["Road Name"], s["Section"]): f"S{s['Section']} — {s['Road Name'] or '-'}"
                 for s in st.session_state.manual_sections
             }
             picked = st.selectbox(
@@ -718,12 +757,12 @@ with tabs[1]:
             with col_delete:
                 if st.button("🗑️ Delete Selected Section", use_container_width=True):
                     st.session_state.manual_sections = [
-                        s for s in st.session_state.manual_sections if s["Section"] != picked
+                        s for s in st.session_state.manual_sections if skey(s["Road Name"], s["Section"]) != picked
                     ]
                     st.session_state.section_photos.pop(picked, None)
                     if st.session_state.edit_target == picked:
                         st.session_state.edit_target = None
-                    st.success(f"Deleted Section {picked}.")
+                    st.success(f"Deleted Section {picked[1]} — {picked[0]}.")
                     st.rerun()
 
             if st.button("🗑️ Clear All Sections", type="secondary"):
@@ -737,7 +776,6 @@ with tabs[1]:
             pci_data.append({
                 "Section": s["Section"],
                 "Road Name": s.get("Road Name", "-"),
-                "Section Name": s.get("Section Name", "-"),
                 "Defect Type": s["Defect Type"],
                 "Severity": s["Severity"],
                 "Area (%)": s["Area (%)"],
@@ -745,7 +783,6 @@ with tabs[1]:
             iri_data.append({
                 "Section": s["Section"],
                 "Road Name": s.get("Road Name", "-"),
-                "Section Name": s.get("Section Name", "-"),
                 "IRI (m/km)": s["IRI (m/km)"],
             })
 
@@ -761,7 +798,7 @@ for row in pci_data:
     pci = max(0, 100 - deduct)
     condition, color = classify_pci(pci)
     pci_results.append({
-        "Section": row["Section"], "Road Name": row.get("Road Name", "-"), "Section Name": row.get("Section Name", "-"),
+        "Section": row["Section"], "Road Name": row.get("Road Name", "-"),
         "Defect Type": row["Defect Type"],
         "Severity": row["Severity"], "Area (%)": row["Area (%)"],
         "Weighting": w, "Severity Factor": sf, "Deduct Value": round(deduct, 2),
@@ -773,7 +810,7 @@ iri_results = []
 for row in iri_data:
     condition, color = classify_iri(row["IRI (m/km)"])
     iri_results.append({
-        "Section": row["Section"], "Road Name": row.get("Road Name", "-"), "Section Name": row.get("Section Name", "-"),
+        "Section": row["Section"], "Road Name": row.get("Road Name", "-"),
         "IRI (m/km)": row["IRI (m/km)"],
         "Condition": condition, "Color": color,
         "Recommendation": iri_recommendation(row["IRI (m/km)"])
@@ -919,22 +956,23 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             st.markdown("### 📋 PCI Computation Table")
-            display_pci = df_pci[["Section", "Road Name", "Section Name", "Defect Type", "Severity", "Area (%)", "Weighting",
+            display_pci = df_pci[["Section", "Road Name", "Defect Type", "Severity", "Area (%)", "Weighting",
                                    "Severity Factor", "Deduct Value", "PCI", "Condition", "Recommendation"]].copy()
             styled = display_pci.style.map(color_condition, subset=["Condition"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            sections_with_photos = [int(s) for s in df_pci["Section"] if int(s) in st.session_state.section_photos]
+            sections_with_photos = [skey(row["Road Name"], row["Section"]) for _, row in df_pci.iterrows()
+                                    if skey(row["Road Name"], row["Section"]) in st.session_state.section_photos]
             if sections_with_photos:
                 st.markdown("### 📷 Defect Photos by Section")
-                for sec in sections_with_photos:
-                    row = df_pci[df_pci["Section"] == sec].iloc[0]
-                    with st.expander(f"Section {sec} — {row['Condition']} (PCI {row['PCI']:.1f})"):
+                for key in sections_with_photos:
+                    row = df_pci[(df_pci["Road Name"] == key[0]) & (df_pci["Section"] == key[1])].iloc[0]
+                    with st.expander(f"Section {key[1]} — {key[0]} — {row['Condition']} (PCI {row['PCI']:.1f})"):
                         c1, c2 = st.columns([1, 2])
                         with c1:
-                            show_section_photo(sec)
+                            show_section_photo(key)
                         with c2:
-                            st.write(f"**Road:** {row['Road Name']} ({row['Section Name']})")
+                            st.write(f"**Road:** {row['Road Name']}")
                             st.write(f"**Defect:** {row['Defect Type']}")
                             st.write(f"**Severity:** {row['Severity']}")
                             st.write(f"**Area Affected:** {row['Area (%)']}%")
@@ -1017,7 +1055,7 @@ if iri_tab:
                 st.plotly_chart(fig_pie2, use_container_width=True)
 
             st.markdown("### 📋 IRI Results Table")
-            display_iri = df_iri[["Section", "Road Name", "Section Name", "IRI (m/km)", "Condition", "Recommendation"]].copy()
+            display_iri = df_iri[["Section", "Road Name", "IRI (m/km)", "Condition", "Recommendation"]].copy()
             styled_iri = display_iri.style.map(color_condition, subset=["Condition"])
             st.dataframe(styled_iri, use_container_width=True, hide_index=True)
 
@@ -1031,17 +1069,17 @@ if mode == "Hybrid (PCI + IRI)":
         if df_pci.empty or df_iri.empty:
             st.warning("⚠️ Both PCI and IRI data are required for the Dashboard.")
         else:
-            pci_map = {r["Section"]: r for r in pci_results}
-            iri_map = {r["Section"]: r for r in iri_results}
-            common_sections = sorted(set(pci_map.keys()) & set(iri_map.keys()))
+            pci_map = {skey(r["Road Name"], r["Section"]): r for r in pci_results}
+            iri_map = {skey(r["Road Name"], r["Section"]): r for r in iri_results}
+            common_keys = sorted(set(pci_map.keys()) & set(iri_map.keys()))
 
             hybrid_rows = []
-            for sec in common_sections:
-                p = pci_map[sec]
-                r = iri_map[sec]
+            for key in common_keys:
+                p = pci_map[key]
+                r = iri_map[key]
                 combined = hybrid_condition(p["Condition"], r["Condition"])
                 hybrid_rows.append({
-                    "Section": sec, "Road Name": p.get("Road Name", "-"), "Section Name": p.get("Section Name", "-"),
+                    "Key": key, "Section": key[1], "Road Name": key[0],
                     "PCI": p["PCI"], "PCI Class": p["Condition"],
                     "IRI (m/km)": r["IRI (m/km)"], "IRI Class": r["Condition"],
                     "Combined Condition": combined, "Maintenance Recommendation": hybrid_recommendation(combined)
@@ -1050,21 +1088,18 @@ if mode == "Hybrid (PCI + IRI)":
 
             # ── Section filter ──
             st.markdown("### 🔎 Filter Sections")
-            section_labels = {
-                row["Section"]: f"S{row['Section']} — {row['Road Name']} ({row['Section Name']})"
-                for row in hybrid_rows
-            }
-            selected_sections = st.multiselect(
+            section_labels = {row["Key"]: f"S{row['Section']} — {row['Road Name']}" for row in hybrid_rows}
+            selected_keys = st.multiselect(
                 "Choose which section(s) to display on the dashboard",
                 options=list(section_labels.keys()),
                 default=list(section_labels.keys()),
                 format_func=lambda x: section_labels[x]
             )
 
-            if not selected_sections:
+            if not selected_keys:
                 st.info("Select at least one section above to view the dashboard.")
             else:
-                df_hybrid = df_hybrid_full[df_hybrid_full["Section"].isin(selected_sections)].reset_index(drop=True)
+                df_hybrid = df_hybrid_full[df_hybrid_full["Key"].isin(selected_keys)].reset_index(drop=True)
 
                 st.markdown("---")
                 k1, k2, k3 = st.columns(3)
@@ -1096,7 +1131,7 @@ if mode == "Hybrid (PCI + IRI)":
                 st.plotly_chart(fig_compare, use_container_width=True)
 
                 st.markdown("### 📋 Hybrid Summary Table")
-                display_hybrid_cols = ["Section", "Road Name", "Section Name", "PCI", "PCI Class",
+                display_hybrid_cols = ["Section", "Road Name", "PCI", "PCI Class",
                                        "IRI (m/km)", "IRI Class", "Combined Condition", "Maintenance Recommendation"]
                 styled_hybrid = df_hybrid[display_hybrid_cols].style.map(
                     color_condition, subset=["PCI Class", "IRI Class", "Combined Condition"])
@@ -1110,17 +1145,17 @@ if mode == "Hybrid (PCI + IRI)":
                 df_priority["Priority Level"] = df_priority["Priority"].map(
                     {1: "🔴 Immediate", 2: "🟡 Short-term", 3: "🟢 Scheduled", 4: "✅ Monitor only"})
                 for _, row in df_priority.iterrows():
-                    sec = int(row["Section"])
-                    with st.expander(f"{row['Priority Level']} — Section {sec} | {row['Road Name']} ({row['Section Name']}) | {row['Combined Condition']}"):
+                    key = row["Key"]
+                    with st.expander(f"{row['Priority Level']} — Section {key[1]} | {row['Road Name']} | {row['Combined Condition']}"):
                         c1, c2, c3 = st.columns(3)
                         c1.metric("PCI", f"{row['PCI']:.1f}")
                         c2.metric("IRI", f"{row['IRI (m/km)']:.2f} m/km")
                         c3.metric("Combined", row["Combined Condition"])
                         st.info(f"**Recommended Action:** {row['Maintenance Recommendation']}")
-                        if sec in st.session_state.section_photos:
-                            show_section_photo(sec, width=320)
+                        if key in st.session_state.section_photos:
+                            show_section_photo(key, width=320)
 
-                csv = df_hybrid.drop(columns=["Priority"]).to_csv(index=False)
+                csv = df_hybrid.drop(columns=["Priority", "Key"]).to_csv(index=False)
                 st.download_button("⬇️ Download Summary as CSV", data=csv,
                                    file_name="TCG633_Pavement_Results.csv", mime="text/csv")
 
