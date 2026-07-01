@@ -1020,12 +1020,29 @@ if mode == "Hybrid (PCI + IRI)":
             df_hybrid_full = pd.DataFrame(hybrid_rows)
 
             st.markdown("### 🔎 Filter Sections")
+            st.caption("Choose which section(s) to display on the dashboard")
             all_sections = sorted(df_hybrid_full["Section"].unique())
-            selected_sections = st.multiselect(
-                "Choose which section(s) to display on the dashboard",
-                options=all_sections, default=all_sections,
-                format_func=lambda s: f"Section {s}"
-            )
+
+            btn_all, btn_none = st.columns(2)
+            with btn_all:
+                if st.button("✅ Select All", use_container_width=True, key="filter_select_all"):
+                    for sec in all_sections:
+                        st.session_state[f"filter_chk_{sec}"] = True
+            with btn_none:
+                if st.button("⬜ Clear All", use_container_width=True, key="filter_clear_all"):
+                    for sec in all_sections:
+                        st.session_state[f"filter_chk_{sec}"] = False
+
+            selected_sections = []
+            n_cols = min(4, len(all_sections)) or 1
+            filter_cols = st.columns(n_cols)
+            for i, sec in enumerate(all_sections):
+                road = df_hybrid_full.loc[df_hybrid_full["Section"] == sec, "Road Name"].iloc[0]
+                label = f"Section {sec} – {road}" if road and road != "-" else f"Section {sec}"
+                with filter_cols[i % n_cols]:
+                    checked = st.checkbox(label, value=True, key=f"filter_chk_{sec}")
+                if checked:
+                    selected_sections.append(sec)
 
             if not selected_sections:
                 st.info("Select at least one section above to view the dashboard.")
