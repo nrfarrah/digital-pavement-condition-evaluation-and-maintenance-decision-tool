@@ -186,7 +186,28 @@ st.markdown("""
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
     mode = st.radio("**Analysis Mode**", ["PCI Only", "IRI Only", "Hybrid (PCI + IRI)"], index=2)
-    st.caption("ℹ️ Full instructions, FAQs, and PCI/IRI classification benchmarks are in the **📖 How to Use** tab.")
+    st.markdown("---")
+    st.markdown("### 📋 About")
+    st.info("This tool evaluates road pavement condition using PCI (visual defect survey) and IRI (roughness measurement) in accordance with JKR and ASTM D6433 standards.")
+    st.markdown("---")
+
+    # ── BENCHMARK REFERENCE TABLE IN SIDEBAR ──
+    st.markdown("### 📊 Classification Benchmarks")
+    st.markdown("**PCI – Pavement Condition Index**")
+    pci_bench = pd.DataFrame({
+        "Range": ["85 – 100", "70 – 84", "55 – 69", "0 – 54"],
+        "Rating": ["Very Good", "Good / Satisfactory", "Fair", "Poor"],
+        "Action": ["Routine maintenance", "Preventive maintenance", "Surface treatment", "Rehabilitation"]
+    })
+    st.dataframe(pci_bench, use_container_width=True, hide_index=True)
+
+    st.markdown("**IRI – International Roughness Index (m/km)**")
+    iri_bench = pd.DataFrame({
+        "Range": ["< 2.0", "2.0 – 3.0", "3.0 – 4.0", "> 4.0"],
+        "Rating": ["Very Good", "Good", "Fair", "Poor (Rough)"],
+        "Action": ["Routine maintenance", "Preventive maintenance", "Surface treatment", "Rehabilitation"]
+    })
+    st.dataframe(iri_bench, use_container_width=True, hide_index=True)
 
 # ── SESSION STATE ──
 if "manual_sections" not in st.session_state:
@@ -198,17 +219,13 @@ if "section_photos" not in st.session_state:
 if "edit_target" not in st.session_state:
     st.session_state.edit_target = None  # (road_name, section_id) currently being edited, or None
 
-if "form_version" not in st.session_state:
-    st.session_state.form_version = 0  # bumped every time the edit target changes, forces fresh widgets
-
 # ── TABS ──
-# IMPORTANT: always create the SAME number/labels of tabs on every rerun, regardless of
-# `mode`. Streamlit's tab widget tracks which panel is "selected" on the frontend; if the
-# number of tabs changes between reruns (e.g. 3 tabs in "PCI Only" vs 5 in "Hybrid"), the
-# frontend selection can desync from the backend content, causing the wrong panel's content
-# to render under the wrong tab label. Instead, we keep 5 fixed tabs and simply show an
-# "not applicable in this mode" message inside a tab when it doesn't apply.
-tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "📊 Dashboard"]
+if mode == "PCI Only":
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis"]
+elif mode == "IRI Only":
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📈 IRI Analysis"]
+else:
+    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "📊 Dashboard"]
 
 tabs = st.tabs(tab_labels)
 
@@ -523,7 +540,9 @@ with tabs[1]:
             st.info(f"✏️ Editing **Section {edit_data['Section']} — {edit_data['Road Name']}**. Update the fields below and click **Update Section**.")
             if st.button("✖️ Cancel Edit"):
                 st.session_state.edit_target = None
-                st.session_state.form_version += 1
+                for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                          "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                    st.session_state.pop(_k, None)
                 st.rerun()
         else:
             st.caption("Fill in every field, then click **Add Section**. Road Name, Section ID, PCI info, and IRI info are all required before you can proceed. "
@@ -535,29 +554,21 @@ with tabs[1]:
                 else (DEFECT_LIST.index(edit_data["Defect Type"]) if edit_data["Defect Type"] in DEFECT_LIST else 0)
         default_severity_index = SEVERITY_LIST.index(edit_data["Severity"]) if edit_data else 0
 
-        # ── FORM KEY SUFFIX ──
-        # Tied to the *identity* of the section being edited (its Road Name + Section ID),
-        # not just an incrementing counter. This guarantees that as soon as edit_target
-        # changes to a different section, every widget below gets a brand-new key and is
-        # forced to re-read its `value=` from edit_data — so it can never keep showing a
-        # previously-edited section's data.
-        if edit_data:
-            fv = f"edit_{edit_data['Road Name']}_{edit_data['Section']}_{st.session_state.form_version}"
-        else:
-            fv = f"new_{st.session_state.form_version}"
-
         # ── ENTRY FORM ──
-        with st.form(f"section_form_{fv}", clear_on_submit=False):
+        # clear_on_submit is OFF on purpose: if validation fails (e.g. IRI left blank),
+        # we want the fields the user already filled in to stay put, not get wiped.
+        # Fields are only cleared manually after a successful save (see below).
+        with st.form("section_form", clear_on_submit=False):
             st.markdown("#### 📋 Section Entry Form")
 
             st.markdown("**🛣️ Location Info**")
             loc1, loc2 = st.columns(2)
             with loc1:
                 f_road_name = st.text_input("Road Name", value=edit_data["Road Name"] if edit_data else "",
-                                            placeholder="e.g. Jalan Datuk Mohd Musa", key=f"f_road_name_{fv}")
+                                            placeholder="e.g. Jalan Datuk Mohd Musa", key="f_road_name")
             with loc2:
                 f_section_str = st.text_input("Section ID (number)", value=str(edit_data["Section"]) if edit_data else "",
-                                              placeholder="e.g. 1", key=f"f_section_str_{fv}")
+                                              placeholder="e.g. 1", key="f_section_str")
                 st.caption("ℹ️ The same Section ID can be reused for a different Road Name.")
 
             col1, col2 = st.columns(2)
@@ -566,7 +577,7 @@ with tabs[1]:
                 st.markdown("**🔍 PCI – Defect Info**")
                 f_defect = st.selectbox("Defect Type", DEFECT_LIST, index=default_defect_index,
                                         help="Select the primary defect observed in this section. Choose 'Other (Custom)' if your defect is not listed.",
-                                        key=f"f_defect_{fv}")
+                                        key="f_defect")
                 f_custom_defect = ""
                 if f_defect == "Other (Custom)":
                     f_custom_defect = st.text_input(
@@ -574,21 +585,21 @@ with tabs[1]:
                         value=edit_data["Defect Type"] if edit_data and edit_data.get("Is Custom") else "",
                         placeholder="e.g. Depression, Delamination, Joint Failure…",
                         help="Type in the exact defect name. A default weight of 1.0 will be applied.",
-                        key=f"f_custom_defect_{fv}"
+                        key="f_custom_defect"
                     )
                     st.caption("ℹ️ Custom defects use a default weighting of **1.0**. The PCI result is an estimate.")
                 f_severity = st.selectbox("Severity Level", SEVERITY_LIST, index=default_severity_index,
-                                          help="Low = minor, Medium = moderate, High = severe", key=f"f_severity_{fv}")
+                                          help="Low = minor, Medium = moderate, High = severe", key="f_severity")
                 f_area_str = st.text_input("Area Affected (%)", value=str(edit_data["Area (%)"]) if edit_data else "",
-                                           placeholder="e.g. 5 (required for PCI)", key=f"f_area_str_{fv}")
+                                           placeholder="e.g. 5 (required for PCI)", key="f_area_str")
                 f_photo = st.file_uploader("📷 Defect Photo (optional)", type=["jpg", "jpeg", "png"],
                                            help="Attach a site photo of the observed defect for this section",
-                                           key=f"f_photo_{fv}")
+                                           key="f_photo")
 
             with col2:
                 st.markdown("**📏 IRI – Roughness Info**")
                 f_iri_str = st.text_input("IRI Value (m/km)", value=str(edit_data["IRI (m/km)"]) if edit_data else "",
-                                          placeholder="e.g. 2.0 (required for IRI)", key=f"f_iri_str_{fv}")
+                                          placeholder="e.g. 2.0 (required for IRI)", key="f_iri_str")
                 if f_photo is not None:
                     st.image(f_photo, caption="Photo preview", use_container_width=True)
                 elif edit_data and skey(edit_data["Road Name"], edit_data["Section"]) in st.session_state.section_photos:
@@ -659,6 +670,8 @@ with tabs[1]:
                 new_road = f_road_name.strip()
                 new_key = skey(new_road, section_val)
 
+                # Duplicate check: same Road Name + Section ID combo (ignore the entry being edited).
+                # A Section ID CAN be reused as long as the Road Name is different.
                 existing_keys = [skey(s["Road Name"], s["Section"]) for s in st.session_state.manual_sections
                                  if not edit_data or skey(s["Road Name"], s["Section"]) != skey(edit_data["Road Name"], edit_data["Section"])]
                 if new_key in existing_keys:
@@ -696,7 +709,10 @@ with tabs[1]:
                     iri_cond, _ = classify_iri(iri_val)
                     action = "updated" if edit_data else "added"
 
-                    st.session_state.form_version += 1
+                    # Now that the save succeeded, it's safe to clear the form for the next entry.
+                    for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                              "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                        st.session_state.pop(_k, None)
 
                     st.session_state["section_form_flash"] = f"✅ Section {section_val} {action}! PCI = {pci_now:.1f} ({pci_cond}) | IRI = {iri_val:.2f} ({iri_cond})"
                     st.rerun()
@@ -742,22 +758,22 @@ with tabs[1]:
 
             # ── Edit / Delete by picking from a list ──
             st.markdown("#### ✏️ Edit or 🗑️ Delete a Section")
-            sections_sorted = sorted(st.session_state.manual_sections, key=lambda s: (s["Section"], s["Road Name"]))
             section_options = {
                 skey(s["Road Name"], s["Section"]): f"S{s['Section']} — {s['Road Name'] or '-'}"
-                for s in sections_sorted
+                for s in st.session_state.manual_sections
             }
             picked = st.selectbox(
                 "Choose a section",
                 options=list(section_options.keys()),
-                format_func=lambda x: section_options[x],
-                key="section_picker"
+                format_func=lambda x: section_options[x]
             )
             col_edit, col_delete = st.columns(2)
             with col_edit:
                 if st.button("✏️ Edit Selected Section", use_container_width=True):
                     st.session_state.edit_target = picked
-                    st.session_state.form_version += 1
+                    for _k in ["f_road_name", "f_section_str", "f_defect", "f_custom_defect",
+                              "f_severity", "f_area_str", "f_photo", "f_iri_str"]:
+                        st.session_state.pop(_k, None)
                     st.rerun()
             with col_delete:
                 if st.button("🗑️ Delete Selected Section", use_container_width=True):
@@ -767,7 +783,6 @@ with tabs[1]:
                     st.session_state.section_photos.pop(picked, None)
                     if st.session_state.edit_target == picked:
                         st.session_state.edit_target = None
-                        st.session_state.form_version += 1
                     st.success(f"Deleted Section {picked[1]} — {picked[0]}.")
                     st.rerun()
 
@@ -775,7 +790,6 @@ with tabs[1]:
                 st.session_state.manual_sections = []
                 st.session_state.section_photos = {}
                 st.session_state.edit_target = None
-                st.session_state.form_version += 1
                 st.rerun()
 
         # Build pci_data / iri_data from session state for analysis tabs
@@ -827,14 +841,86 @@ df_pci = pd.DataFrame(pci_results) if pci_results else pd.DataFrame()
 df_iri = pd.DataFrame(iri_results) if iri_results else pd.DataFrame()
 
 
+def benchmark_table_pci():
+    """Render a color-coded PCI benchmark reference card."""
+    st.markdown("""
+<div style='margin-bottom:1rem;'>
+<b>📖 PCI Benchmark Reference</b>
+<table style='width:100%; border-collapse:collapse; font-size:0.88rem; margin-top:0.5rem;'>
+<tr style='background:#2c3e50; color:white;'>
+  <th style='padding:6px 10px; text-align:left;'>PCI Range</th>
+  <th style='padding:6px 10px; text-align:left;'>Rating</th>
+  <th style='padding:6px 10px; text-align:left;'>What it means</th>
+  <th style='padding:6px 10px; text-align:left;'>Recommended Action</th>
+</tr>
+<tr style='background:#d5f5e3; color:#1e8449;'>
+  <td style='padding:6px 10px;'>85 – 100</td><td style='padding:6px 10px;'>🟢 Very Good</td>
+  <td style='padding:6px 10px;'>Pavement in excellent condition, minor or no defects</td>
+  <td style='padding:6px 10px;'>Routine maintenance (cleaning, grass cutting)</td>
+</tr>
+<tr style='background:#eafaf1; color:#1e8449;'>
+  <td style='padding:6px 10px;'>70 – 84</td><td style='padding:6px 10px;'>🟢 Good / Satisfactory</td>
+  <td style='padding:6px 10px;'>Slight defects, still functional with good ride quality</td>
+  <td style='padding:6px 10px;'>Preventive maintenance (crack sealing, local patching)</td>
+</tr>
+<tr style='background:#fef9e7; color:#d68910;'>
+  <td style='padding:6px 10px;'>55 – 69</td><td style='padding:6px 10px;'>🟡 Fair</td>
+  <td style='padding:6px 10px;'>Visible defects affecting ride comfort, early deterioration</td>
+  <td style='padding:6px 10px;'>Surface treatment / localized overlay</td>
+</tr>
+<tr style='background:#fadbd8; color:#922b21;'>
+  <td style='padding:6px 10px;'>0 – 54</td><td style='padding:6px 10px;'>🔴 Poor</td>
+  <td style='padding:6px 10px;'>Severe defects, significant structural or surface failure</td>
+  <td style='padding:6px 10px;'>Major rehabilitation / reconstruction assessment</td>
+</tr>
+</table>
+</div>
+""", unsafe_allow_html=True)
+
+
+def benchmark_table_iri():
+    """Render a color-coded IRI benchmark reference card."""
+    st.markdown("""
+<div style='margin-bottom:1rem;'>
+<b>📖 IRI Benchmark Reference</b>
+<table style='width:100%; border-collapse:collapse; font-size:0.88rem; margin-top:0.5rem;'>
+<tr style='background:#2c3e50; color:white;'>
+  <th style='padding:6px 10px; text-align:left;'>IRI (m/km)</th>
+  <th style='padding:6px 10px; text-align:left;'>Rating</th>
+  <th style='padding:6px 10px; text-align:left;'>What it means</th>
+  <th style='padding:6px 10px; text-align:left;'>Recommended Action</th>
+</tr>
+<tr style='background:#d5f5e3; color:#1e8449;'>
+  <td style='padding:6px 10px;'>&lt; 2.0</td><td style='padding:6px 10px;'>🟢 Very Good</td>
+  <td style='padding:6px 10px;'>Very smooth ride, like a new highway surface</td>
+  <td style='padding:6px 10px;'>Routine maintenance</td>
+</tr>
+<tr style='background:#eafaf1; color:#1e8449;'>
+  <td style='padding:6px 10px;'>2.0 – 3.0</td><td style='padding:6px 10px;'>🟢 Good</td>
+  <td style='padding:6px 10px;'>Slightly rough but comfortable; minor surface variation</td>
+  <td style='padding:6px 10px;'>Preventive maintenance (localized patching/leveling)</td>
+</tr>
+<tr style='background:#fef9e7; color:#d68910;'>
+  <td style='padding:6px 10px;'>3.0 – 4.0</td><td style='padding:6px 10px;'>🟡 Fair</td>
+  <td style='padding:6px 10px;'>Noticeable roughness, causes driver/passenger discomfort</td>
+  <td style='padding:6px 10px;'>Surface treatment / thin overlay</td>
+</tr>
+<tr style='background:#fadbd8; color:#922b21;'>
+  <td style='padding:6px 10px;'>&gt; 4.0</td><td style='padding:6px 10px;'>🔴 Poor (Rough)</td>
+  <td style='padding:6px 10px;'>Severely rough, vehicle damage risk, urgent attention needed</td>
+  <td style='padding:6px 10px;'>Structural overlay / rehabilitation</td>
+</tr>
+</table>
+</div>
+""", unsafe_allow_html=True)
+
+
 # ══════════════════════════════════════════════
-# PCI TAB (always tabs[2])
+# PCI TAB
 # ══════════════════════════════════════════════
-with tabs[2]:
-    if mode == "IRI Only":
-        st.markdown("## 📊 PCI Analysis Results")
-        st.info("ℹ️ PCI Analysis isn't used in **IRI Only** mode. Switch the Analysis Mode in the sidebar to **PCI Only** or **Hybrid (PCI + IRI)** to view it.")
-    else:
+if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
+    pci_tab = tabs[2]
+    with pci_tab:
         st.markdown("## 📊 PCI Analysis Results")
         if df_pci.empty:
             st.warning("⚠️ No PCI data available. Please upload a file or enter data manually in the Data Input tab.")
@@ -848,6 +934,10 @@ with tabs[2]:
             k2.metric("Best Section", f"S{int(best['Section'])} ({best['PCI']:.1f})")
             k3.metric("Worst Section", f"S{int(worst['Section'])} ({worst['PCI']:.1f})")
             k4.metric("Sections Needing Attention", f"{len(df_pci[df_pci['Condition'].isin(['Poor','Fair'])])}/{n}")
+
+            st.markdown("---")
+
+            benchmark_table_pci()
 
             st.markdown("---")
             col1, col2 = st.columns([3, 2])
@@ -911,13 +1001,17 @@ with tabs[2]:
 
 
 # ══════════════════════════════════════════════
-# IRI TAB (always tabs[3])
+# IRI TAB
 # ══════════════════════════════════════════════
-with tabs[3]:
-    if mode == "PCI Only":
-        st.markdown("## 📈 IRI Analysis Results")
-        st.info("ℹ️ IRI Analysis isn't used in **PCI Only** mode. Switch the Analysis Mode in the sidebar to **IRI Only** or **Hybrid (PCI + IRI)** to view it.")
-    else:
+if mode == "IRI Only":
+    iri_tab = tabs[2]
+elif mode == "Hybrid (PCI + IRI)":
+    iri_tab = tabs[3]
+else:
+    iri_tab = None
+
+if iri_tab:
+    with iri_tab:
         st.markdown("## 📈 IRI Analysis Results")
         if df_iri.empty:
             st.warning("⚠️ No IRI data available. Please upload a file or enter data manually in the Data Input tab.")
@@ -931,6 +1025,10 @@ with tabs[3]:
             k2.metric("Smoothest Section", f"S{int(best_iri['Section'])} ({best_iri['IRI (m/km)']:.2f})")
             k3.metric("Roughest Section", f"S{int(worst_iri['Section'])} ({worst_iri['IRI (m/km)']:.2f})")
             k4.metric("Sections Needing Attention", f"{len(df_iri[df_iri['Condition'].isin(['Poor (Rough)', 'Fair'])])}/{n}")
+
+            st.markdown("---")
+
+            benchmark_table_iri()
 
             st.markdown("---")
             col1, col2 = st.columns([3, 2])
@@ -984,13 +1082,10 @@ with tabs[3]:
 
 
 # ══════════════════════════════════════════════
-# DASHBOARD TAB (always tabs[4])
+# DASHBOARD TAB (was "Summary & Hybrid")
 # ══════════════════════════════════════════════
-with tabs[4]:
-    if mode != "Hybrid (PCI + IRI)":
-        st.markdown("## 📊 Dashboard")
-        st.info("ℹ️ The Dashboard combines PCI + IRI and is only available in **Hybrid (PCI + IRI)** mode. Switch the Analysis Mode in the sidebar to view it.")
-    else:
+if mode == "Hybrid (PCI + IRI)":
+    with tabs[4]:
         st.markdown("## 📊 Dashboard")
         if df_pci.empty or df_iri.empty:
             st.warning("⚠️ Both PCI and IRI data are required for the Dashboard.")
