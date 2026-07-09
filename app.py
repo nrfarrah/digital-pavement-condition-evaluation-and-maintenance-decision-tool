@@ -202,12 +202,13 @@ if "form_version" not in st.session_state:
     st.session_state.form_version = 0  # bumped every time the edit target changes, forces fresh widgets
 
 # ── TABS ──
-if mode == "PCI Only":
-    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis"]
-elif mode == "IRI Only":
-    tab_labels = ["📖 How to Use", "📥 Data Input", "📈 IRI Analysis"]
-else:
-    tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "📊 Dashboard"]
+# IMPORTANT: always create the SAME number/labels of tabs on every rerun, regardless of
+# `mode`. Streamlit's tab widget tracks which panel is "selected" on the frontend; if the
+# number of tabs changes between reruns (e.g. 3 tabs in "PCI Only" vs 5 in "Hybrid"), the
+# frontend selection can desync from the backend content, causing the wrong panel's content
+# to render under the wrong tab label. Instead, we keep 5 fixed tabs and simply show an
+# "not applicable in this mode" message inside a tab when it doesn't apply.
+tab_labels = ["📖 How to Use", "📥 Data Input", "📊 PCI Analysis", "📈 IRI Analysis", "📊 Dashboard"]
 
 tabs = st.tabs(tab_labels)
 
@@ -827,11 +828,13 @@ df_iri = pd.DataFrame(iri_results) if iri_results else pd.DataFrame()
 
 
 # ══════════════════════════════════════════════
-# PCI TAB
+# PCI TAB (always tabs[2])
 # ══════════════════════════════════════════════
-if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
-    pci_tab = tabs[2]
-    with pci_tab:
+with tabs[2]:
+    if mode == "IRI Only":
+        st.markdown("## 📊 PCI Analysis Results")
+        st.info("ℹ️ PCI Analysis isn't used in **IRI Only** mode. Switch the Analysis Mode in the sidebar to **PCI Only** or **Hybrid (PCI + IRI)** to view it.")
+    else:
         st.markdown("## 📊 PCI Analysis Results")
         if df_pci.empty:
             st.warning("⚠️ No PCI data available. Please upload a file or enter data manually in the Data Input tab.")
@@ -908,17 +911,13 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
 
 
 # ══════════════════════════════════════════════
-# IRI TAB
+# IRI TAB (always tabs[3])
 # ══════════════════════════════════════════════
-if mode == "IRI Only":
-    iri_tab = tabs[2]
-elif mode == "Hybrid (PCI + IRI)":
-    iri_tab = tabs[3]
-else:
-    iri_tab = None
-
-if iri_tab:
-    with iri_tab:
+with tabs[3]:
+    if mode == "PCI Only":
+        st.markdown("## 📈 IRI Analysis Results")
+        st.info("ℹ️ IRI Analysis isn't used in **PCI Only** mode. Switch the Analysis Mode in the sidebar to **IRI Only** or **Hybrid (PCI + IRI)** to view it.")
+    else:
         st.markdown("## 📈 IRI Analysis Results")
         if df_iri.empty:
             st.warning("⚠️ No IRI data available. Please upload a file or enter data manually in the Data Input tab.")
@@ -985,10 +984,13 @@ if iri_tab:
 
 
 # ══════════════════════════════════════════════
-# DASHBOARD TAB (was "Summary & Hybrid")
+# DASHBOARD TAB (always tabs[4])
 # ══════════════════════════════════════════════
-if mode == "Hybrid (PCI + IRI)":
-    with tabs[4]:
+with tabs[4]:
+    if mode != "Hybrid (PCI + IRI)":
+        st.markdown("## 📊 Dashboard")
+        st.info("ℹ️ The Dashboard combines PCI + IRI and is only available in **Hybrid (PCI + IRI)** mode. Switch the Analysis Mode in the sidebar to view it.")
+    else:
         st.markdown("## 📊 Dashboard")
         if df_pci.empty or df_iri.empty:
             st.warning("⚠️ Both PCI and IRI data are required for the Dashboard.")
