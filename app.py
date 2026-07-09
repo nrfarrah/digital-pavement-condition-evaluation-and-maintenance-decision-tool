@@ -186,28 +186,7 @@ st.markdown("""
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
     mode = st.radio("**Analysis Mode**", ["PCI Only", "IRI Only", "Hybrid (PCI + IRI)"], index=2)
-    st.markdown("---")
-    st.markdown("### 📋 About")
-    st.info("This tool evaluates road pavement condition using PCI (visual defect survey) and IRI (roughness measurement) in accordance with JKR and ASTM D6433 standards.")
-    st.markdown("---")
-
-    # ── BENCHMARK REFERENCE TABLE IN SIDEBAR ──
-    st.markdown("### 📊 Classification Benchmarks")
-    st.markdown("**PCI – Pavement Condition Index**")
-    pci_bench = pd.DataFrame({
-        "Range": ["85 – 100", "70 – 84", "55 – 69", "0 – 54"],
-        "Rating": ["Very Good", "Good / Satisfactory", "Fair", "Poor"],
-        "Action": ["Routine maintenance", "Preventive maintenance", "Surface treatment", "Rehabilitation"]
-    })
-    st.dataframe(pci_bench, use_container_width=True, hide_index=True)
-
-    st.markdown("**IRI – International Roughness Index (m/km)**")
-    iri_bench = pd.DataFrame({
-        "Range": ["< 2.0", "2.0 – 3.0", "3.0 – 4.0", "> 4.0"],
-        "Rating": ["Very Good", "Good", "Fair", "Poor (Rough)"],
-        "Action": ["Routine maintenance", "Preventive maintenance", "Surface treatment", "Rehabilitation"]
-    })
-    st.dataframe(iri_bench, use_container_width=True, hide_index=True)
+    st.caption("ℹ️ Full instructions, FAQs, and PCI/IRI classification benchmarks are in the **📖 How to Use** tab.")
 
 # ── SESSION STATE ──
 if "manual_sections" not in st.session_state:
@@ -556,12 +535,15 @@ with tabs[1]:
         default_severity_index = SEVERITY_LIST.index(edit_data["Severity"]) if edit_data else 0
 
         # ── FORM KEY SUFFIX ──
-        # This is the fix for the "shows the previous section's data" bug: every widget's key
-        # includes the current form_version number. Whenever we start editing a different section
-        # (or cancel, or finish a save), form_version is bumped, which makes Streamlit treat the
-        # widgets as brand-new — so they always take the fresh `value=` from edit_data instead of
-        # remembering whatever was typed for the section that was being edited before.
-        fv = st.session_state.form_version
+        # Tied to the *identity* of the section being edited (its Road Name + Section ID),
+        # not just an incrementing counter. This guarantees that as soon as edit_target
+        # changes to a different section, every widget below gets a brand-new key and is
+        # forced to re-read its `value=` from edit_data — so it can never keep showing a
+        # previously-edited section's data.
+        if edit_data:
+            fv = f"edit_{edit_data['Road Name']}_{edit_data['Section']}_{st.session_state.form_version}"
+        else:
+            fv = f"new_{st.session_state.form_version}"
 
         # ── ENTRY FORM ──
         with st.form(f"section_form_{fv}", clear_on_submit=False):
@@ -676,8 +658,6 @@ with tabs[1]:
                 new_road = f_road_name.strip()
                 new_key = skey(new_road, section_val)
 
-                # Duplicate check: same Road Name + Section ID combo (ignore the entry being edited).
-                # A Section ID CAN be reused as long as the Road Name is different.
                 existing_keys = [skey(s["Road Name"], s["Section"]) for s in st.session_state.manual_sections
                                  if not edit_data or skey(s["Road Name"], s["Section"]) != skey(edit_data["Road Name"], edit_data["Section"])]
                 if new_key in existing_keys:
@@ -715,8 +695,6 @@ with tabs[1]:
                     iri_cond, _ = classify_iri(iri_val)
                     action = "updated" if edit_data else "added"
 
-                    # Now that the save succeeded, bump form_version so the form resets to blank
-                    # (or to the next edit target) instead of keeping these just-submitted values.
                     st.session_state.form_version += 1
 
                     st.session_state["section_form_flash"] = f"✅ Section {section_val} {action}! PCI = {pci_now:.1f} ({pci_cond}) | IRI = {iri_val:.2f} ({iri_cond})"
@@ -763,9 +741,10 @@ with tabs[1]:
 
             # ── Edit / Delete by picking from a list ──
             st.markdown("#### ✏️ Edit or 🗑️ Delete a Section")
+            sections_sorted = sorted(st.session_state.manual_sections, key=lambda s: (s["Section"], s["Road Name"]))
             section_options = {
                 skey(s["Road Name"], s["Section"]): f"S{s['Section']} — {s['Road Name'] or '-'}"
-                for s in st.session_state.manual_sections
+                for s in sections_sorted
             }
             picked = st.selectbox(
                 "Choose a section",
@@ -847,80 +826,6 @@ df_pci = pd.DataFrame(pci_results) if pci_results else pd.DataFrame()
 df_iri = pd.DataFrame(iri_results) if iri_results else pd.DataFrame()
 
 
-def benchmark_table_pci():
-    """Render a color-coded PCI benchmark reference card."""
-    st.markdown("""
-<div style='margin-bottom:1rem;'>
-<b>📖 PCI Benchmark Reference</b>
-<table style='width:100%; border-collapse:collapse; font-size:0.88rem; margin-top:0.5rem;'>
-<tr style='background:#2c3e50; color:white;'>
-  <th style='padding:6px 10px; text-align:left;'>PCI Range</th>
-  <th style='padding:6px 10px; text-align:left;'>Rating</th>
-  <th style='padding:6px 10px; text-align:left;'>What it means</th>
-  <th style='padding:6px 10px; text-align:left;'>Recommended Action</th>
-</tr>
-<tr style='background:#d5f5e3; color:#1e8449;'>
-  <td style='padding:6px 10px;'>85 – 100</td><td style='padding:6px 10px;'>🟢 Very Good</td>
-  <td style='padding:6px 10px;'>Pavement in excellent condition, minor or no defects</td>
-  <td style='padding:6px 10px;'>Routine maintenance (cleaning, grass cutting)</td>
-</tr>
-<tr style='background:#eafaf1; color:#1e8449;'>
-  <td style='padding:6px 10px;'>70 – 84</td><td style='padding:6px 10px;'>🟢 Good / Satisfactory</td>
-  <td style='padding:6px 10px;'>Slight defects, still functional with good ride quality</td>
-  <td style='padding:6px 10px;'>Preventive maintenance (crack sealing, local patching)</td>
-</tr>
-<tr style='background:#fef9e7; color:#d68910;'>
-  <td style='padding:6px 10px;'>55 – 69</td><td style='padding:6px 10px;'>🟡 Fair</td>
-  <td style='padding:6px 10px;'>Visible defects affecting ride comfort, early deterioration</td>
-  <td style='padding:6px 10px;'>Surface treatment / localized overlay</td>
-</tr>
-<tr style='background:#fadbd8; color:#922b21;'>
-  <td style='padding:6px 10px;'>0 – 54</td><td style='padding:6px 10px;'>🔴 Poor</td>
-  <td style='padding:6px 10px;'>Severe defects, significant structural or surface failure</td>
-  <td style='padding:6px 10px;'>Major rehabilitation / reconstruction assessment</td>
-</tr>
-</table>
-</div>
-""", unsafe_allow_html=True)
-
-
-def benchmark_table_iri():
-    """Render a color-coded IRI benchmark reference card."""
-    st.markdown("""
-<div style='margin-bottom:1rem;'>
-<b>📖 IRI Benchmark Reference</b>
-<table style='width:100%; border-collapse:collapse; font-size:0.88rem; margin-top:0.5rem;'>
-<tr style='background:#2c3e50; color:white;'>
-  <th style='padding:6px 10px; text-align:left;'>IRI (m/km)</th>
-  <th style='padding:6px 10px; text-align:left;'>Rating</th>
-  <th style='padding:6px 10px; text-align:left;'>What it means</th>
-  <th style='padding:6px 10px; text-align:left;'>Recommended Action</th>
-</tr>
-<tr style='background:#d5f5e3; color:#1e8449;'>
-  <td style='padding:6px 10px;'>&lt; 2.0</td><td style='padding:6px 10px;'>🟢 Very Good</td>
-  <td style='padding:6px 10px;'>Very smooth ride, like a new highway surface</td>
-  <td style='padding:6px 10px;'>Routine maintenance</td>
-</tr>
-<tr style='background:#eafaf1; color:#1e8449;'>
-  <td style='padding:6px 10px;'>2.0 – 3.0</td><td style='padding:6px 10px;'>🟢 Good</td>
-  <td style='padding:6px 10px;'>Slightly rough but comfortable; minor surface variation</td>
-  <td style='padding:6px 10px;'>Preventive maintenance (localized patching/leveling)</td>
-</tr>
-<tr style='background:#fef9e7; color:#d68910;'>
-  <td style='padding:6px 10px;'>3.0 – 4.0</td><td style='padding:6px 10px;'>🟡 Fair</td>
-  <td style='padding:6px 10px;'>Noticeable roughness, causes driver/passenger discomfort</td>
-  <td style='padding:6px 10px;'>Surface treatment / thin overlay</td>
-</tr>
-<tr style='background:#fadbd8; color:#922b21;'>
-  <td style='padding:6px 10px;'>&gt; 4.0</td><td style='padding:6px 10px;'>🔴 Poor (Rough)</td>
-  <td style='padding:6px 10px;'>Severely rough, vehicle damage risk, urgent attention needed</td>
-  <td style='padding:6px 10px;'>Structural overlay / rehabilitation</td>
-</tr>
-</table>
-</div>
-""", unsafe_allow_html=True)
-
-
 # ══════════════════════════════════════════════
 # PCI TAB
 # ══════════════════════════════════════════════
@@ -940,10 +845,6 @@ if mode in ["PCI Only", "Hybrid (PCI + IRI)"]:
             k2.metric("Best Section", f"S{int(best['Section'])} ({best['PCI']:.1f})")
             k3.metric("Worst Section", f"S{int(worst['Section'])} ({worst['PCI']:.1f})")
             k4.metric("Sections Needing Attention", f"{len(df_pci[df_pci['Condition'].isin(['Poor','Fair'])])}/{n}")
-
-            st.markdown("---")
-
-            benchmark_table_pci()
 
             st.markdown("---")
             col1, col2 = st.columns([3, 2])
@@ -1031,10 +932,6 @@ if iri_tab:
             k2.metric("Smoothest Section", f"S{int(best_iri['Section'])} ({best_iri['IRI (m/km)']:.2f})")
             k3.metric("Roughest Section", f"S{int(worst_iri['Section'])} ({worst_iri['IRI (m/km)']:.2f})")
             k4.metric("Sections Needing Attention", f"{len(df_iri[df_iri['Condition'].isin(['Poor (Rough)', 'Fair'])])}/{n}")
-
-            st.markdown("---")
-
-            benchmark_table_iri()
 
             st.markdown("---")
             col1, col2 = st.columns([3, 2])
